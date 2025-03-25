@@ -17,12 +17,21 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         $price = sanitizeInput($_POST['price']);
         $quantity = sanitizeInput($_POST['quantity']);
 
-        $sql = "INSERT INTO products (category_id, name, price, quantity) VALUES ($category_id, '$name', $price, $quantity)";
+        $sql = "INSERT INTO products (category_id, name, price, quantity)
+                VALUES ($category_id, '$name', $price, $quantity)";
 
         if ($conn->query($sql) === TRUE) {
             $message = "Product added successfully";
         } else {
             $error = "Error adding product: " . $conn->error;
+        }
+    } elseif (isset($_POST['delete_product'])) {
+        $id = sanitizeInput($_POST['id']);
+        $sql = "DELETE FROM products WHERE id=$id";
+        if ($conn->query($sql) === TRUE) {
+            $message = "Product deleted successfully";
+        } else {
+            $error = "Error deleting product: " . $conn->error;
         }
     } elseif (isset($_POST['update_product'])) {
         $id = sanitizeInput($_POST['id']);
@@ -38,15 +47,6 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         } else {
             $error = "Error updating product: " . $conn->error;
         }
-    } elseif (isset($_POST['delete_product'])) {
-        $id = sanitizeInput($_POST['id']);
-        $sql = "DELETE FROM products WHERE id=$id";
-
-        if ($conn->query($sql) === TRUE) {
-            $message = "Product deleted successfully";
-        } else {
-            $error = "Error deleting product: " . $conn->error;
-        }
     }
 }
 
@@ -55,14 +55,16 @@ $categorySql = "SELECT * FROM categories";
 $categoryResult = $conn->query($categorySql);
 
 // Fetch products for listing
-$productsSql = "SELECT products.*, categories.name as category_name FROM products LEFT JOIN categories ON products.category_id = categories.id";
-$productsResult = $conn->query($productsSql);
-
+$productSql = "SELECT products.*, categories.name as category_name 
+                FROM products 
+                LEFT JOIN categories ON products.category_id = categories.id";
+$productResult = $conn->query($productSql);
 ?>
 
 <h2>Manage Products</h2>
 
-<?php if (isset($message)) {
+<?php if (isset($_GET['message'])) {
+    $message = urldecode($_GET['message']);
     echo "<p class='success'>$message</p>";
 } ?>
 <?php if (isset($error)) {
@@ -70,7 +72,7 @@ $productsResult = $conn->query($productsSql);
 } ?>
 
 <form method="post">
-    <select name="category_id" id="category_id" required>
+    <select name="category_id" required>
         <option value="">Select Category</option>
         <?php
         if ($categoryResult->num_rows > 0) {
@@ -101,8 +103,8 @@ $productsResult = $conn->query($productsSql);
     </thead>
     <tbody>
         <?php
-        if ($productsResult->num_rows > 0) {
-            while ($productRow = $productsResult->fetch_assoc()) {
+        if ($productResult->num_rows > 0) {
+            while ($productRow = $productResult->fetch_assoc()) {
                 echo "<tr>";
                 echo "<td>" . $productRow['category_name'] . "</td>";
                 echo "<td>" . $productRow['name'] . "</td>";
@@ -110,7 +112,10 @@ $productsResult = $conn->query($productsSql);
                 echo "<td>" . $productRow['quantity'] . "</td>";
                 echo "<td>";
                 echo "<button onclick=\"editProduct(" . $productRow['id'] . ", " . $productRow['category_id'] . ", '" . $productRow['name'] . "', " . $productRow['price'] . ", " . $productRow['quantity'] . ")\">Edit</button> | ";
-                echo "<form method='post' style='display:inline;'><input type='hidden' name='id' value='" . $productRow['id'] . "'><button type='submit' name='delete_product'>Delete</button></form>";
+                echo "<form method='post' style='display:inline;'>";
+                echo "<input type='hidden' name='id' value='" . $productRow['id'] . "'>";
+                echo "<button type='submit' name='delete_product'>Delete</button>";
+                echo "</form>";
                 echo "</td>";
                 echo "</tr>";
             }
@@ -128,12 +133,9 @@ $productsResult = $conn->query($productsSql);
         <select name="category_id" id="edit_category_id" required>
             <option value="">Select Category</option>
             <?php
-            // Fetch categories again for the edit form
-            $editCategorySql = "SELECT * FROM categories";
-            $editCategoryResult = $conn->query($editCategorySql);
-            if ($editCategoryResult->num_rows > 0) {
-                while ($editCategoryRow = $editCategoryResult->fetch_assoc()) {
-                    echo "<option value='" . $editCategoryRow['id'] . "'>" . $editCategoryRow['name'] . "</option>";
+            if ($categoryResult->num_rows > 0) {
+                while ($categoryRow = $categoryResult->fetch_assoc()) {
+                    echo "<option value='" . $categoryRow['id'] . "'>" . $categoryRow['name'] . "</option>";
                 }
             }
             ?>
@@ -150,10 +152,29 @@ $productsResult = $conn->query($productsSql);
     function editProduct(id, category_id, name, price, quantity) {
         document.getElementById('edit_product_form').style.display = 'block';
         document.getElementById('edit_product_id').value = id;
-        document.getElementById('edit_category_id').value = category_id; // Set the selected category
         document.getElementById('edit_name').value = name;
         document.getElementById('edit_price').value = price;
         document.getElementById('edit_quantity').value = quantity;
+
+        // Populate the category dropdown
+        var categoryDropdown = document.getElementById("edit_category_id");
+        categoryDropdown.innerHTML = ''; // Clear existing options
+
+        <?php
+        $categorySql = "SELECT * FROM categories";
+        $categoryResult = $conn->query($categorySql);
+        if ($categoryResult->num_rows > 0) {
+            while ($categoryRow = $categoryResult->fetch_assoc()) {
+                echo "var option = document.createElement('option');";
+                echo "option.value = '" . $categoryRow['id'] . "';";
+                echo "option.text = '" . $categoryRow['name'] . "';";
+                echo "if (" . $categoryRow['id'] . " == category_id) {";
+                echo "  option.selected = true;";
+                echo "}";
+                echo "categoryDropdown.appendChild(option);";
+            }
+        }
+        ?>
     }
 </script>
 

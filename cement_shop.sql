@@ -31,21 +31,22 @@ CREATE TABLE sellers (
     address TEXT
 );
 
--- -- Table: purchases
--- CREATE TABLE purchases (
---     id INT AUTO_INCREMENT PRIMARY KEY,
---     seller_id INT,
---     product_id INT,
---     quantity INT NOT NULL,
---     price DECIMAL(10, 2) NOT NULL,
---     total DECIMAL(10, 2) NOT NULL,
---     paid DECIMAL(10, 2) NOT NULL,
---     due DECIMAL(10, 2) NOT NULL,
---     purchase_date DATE NOT NULL,
---     invoice_number VARCHAR(255) NOT NULL,
---     FOREIGN KEY (seller_id) REFERENCES sellers(id),
---     FOREIGN KEY (product_id) REFERENCES products(id)
--- );
+-- Table: purchases
+CREATE TABLE purchases (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    seller_id INT,
+    product_id INT,
+    quantity INT NOT NULL,
+    price DECIMAL(10, 2) NOT NULL,
+    total DECIMAL(10, 2) NOT NULL,
+    paid DECIMAL(10, 2) NOT NULL,
+    due DECIMAL(10, 2) NOT NULL,
+    purchase_date DATE NOT NULL,
+    payment_method VARCHAR(50) NOT NULL,
+    invoice_number VARCHAR(20) NOT NULL,
+    FOREIGN KEY (seller_id) REFERENCES sellers(id),
+    FOREIGN KEY (product_id) REFERENCES products(id)
+);
 
 -- Table: customers
 CREATE TABLE customers (
@@ -72,21 +73,15 @@ CREATE TABLE sales (
     FOREIGN KEY (product_id) REFERENCES products(id)
 );
 
-CREATE TABLE purchases (
-    id INT AUTO_INCREMENT PRIMARY KEY,
-    seller_id INT,
-    product_id INT,
-    quantity INT NOT NULL,
-    price DECIMAL(10,2) NOT NULL,
-    total DECIMAL(10,2) NOT NULL,
-    paid DECIMAL(10,2) NOT NULL,
-    due DECIMAL(10,2) NOT NULL,
-    purchase_date DATE NOT NULL,
-    payment_method VARCHAR(50) NOT NULL,
-    invoice_number VARCHAR(20) NOT NULL,
-    FOREIGN KEY (seller_id) REFERENCES sellers(id),
-    FOREIGN KEY (product_id) REFERENCES products(id)
-);
+ALTER TABLE sales
+DROP FOREIGN KEY sales_ibfk_2;
+
+ALTER TABLE sales
+ADD CONSTRAINT sales_ibfk_2
+  FOREIGN KEY (product_id)
+  REFERENCES products (id)
+  ON DELETE CASCADE;
+
 
 CREATE TABLE settings (
     setting_key VARCHAR(255) PRIMARY KEY,

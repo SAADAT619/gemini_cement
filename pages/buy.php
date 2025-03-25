@@ -30,7 +30,9 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         if ($conn->query($sql) === TRUE) {
             $message = "Purchase added successfully. Invoice Number: $invoice_number";
             $updateSql = "UPDATE products SET quantity = quantity + $quantity WHERE id = $product_id";
-            $conn->query($updateSql);
+            if($conn->query($updateSql) !== TRUE){
+                $error = "Error updating product quantity: " . $conn->error;
+            }
 
             header("Location: buy.php?message=" . urlencode($message));
             exit();
@@ -39,7 +41,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         }
     } elseif (isset($_POST['delete_purchase'])) {
         $id = sanitizeInput($_POST['id']);
-         //get product ID before deleting purchase
+        //get product ID before deleting purchase
         $getPurchaseSql = "SELECT product_id, quantity FROM purchases WHERE id = $id";
         $purchaseResult = $conn->query($getPurchaseSql);
 
@@ -48,18 +50,19 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             $quantity_to_update = $purchaseRow['quantity'];
 
             $sql = "DELETE FROM purchases WHERE id=$id";
-             if ($conn->query($sql) === TRUE) {
+            if ($conn->query($sql) === TRUE) {
                 $message = "Purchase deleted successfully";
-                 //update product quantity
+                //update product quantity
                 $updateProductSql = "UPDATE products SET quantity = quantity - $quantity_to_update WHERE id = $product_id_to_update";
-                $conn->query($updateProductSql);
-             } else {
+                if($conn->query($updateProductSql) !== TRUE){
+                    $error = "Error updating product quantity: " . $conn->error;
+                }
+            } else {
                 $error = "Error deleting purchase: " . $conn->error;
-             }
+            }
         } else {
-             $error = "Error deleting purchase: Purchase not found";
+            $error = "Error deleting purchase: Purchase not found";
         }
-       
     } elseif (isset($_POST['update_purchase'])) {
         $id = sanitizeInput($_POST['id']);
         $seller_id = sanitizeInput($_POST['seller_id']);
@@ -88,7 +91,9 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             $quantityDifference = $quantity - $originalQuantity;
             if ($quantityDifference != 0) {
                 $updateProductQuantitySql = "UPDATE products SET quantity = quantity + $quantityDifference WHERE id = $originalProductId";
-                $conn->query($updateProductQuantitySql);
+                if($conn->query($updateProductQuantitySql) !== TRUE){
+                    $error = "Error updating product quantity: " . $conn->error;
+                }
             }
         } else {
             $error = "Error updating purchase: " . $conn->error;
@@ -96,12 +101,15 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     }
 }
 
+// Fetch sellers for dropdown
 $sellerSql = "SELECT * FROM sellers";
 $sellerResult = $conn->query($sellerSql);
 
+// Fetch products for dropdown
 $productSql = "SELECT * FROM products";
 $productResult = $conn->query($productSql);
 
+// Fetch purchases for listing
 $purchasesSql = "SELECT purchases.*, sellers.name as seller_name, products.name as product_name 
                     FROM purchases 
                     LEFT JOIN sellers ON purchases.seller_id = sellers.id 
