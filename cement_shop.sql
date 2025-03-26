@@ -3,8 +3,11 @@
 -- Table: users
 CREATE TABLE users (
     id INT AUTO_INCREMENT PRIMARY KEY,
+    name VARCHAR(255) NOT NULL,
     email VARCHAR(255) UNIQUE NOT NULL,
-    password VARCHAR(255) NOT NULL
+    password VARCHAR(255) NOT NULL,
+    mobile_number VARCHAR(20),
+    role VARCHAR(20) DEFAULT 'user'
 );
 
 -- Table: categories
@@ -70,17 +73,8 @@ CREATE TABLE sales (
     invoice_number VARCHAR(255) NOT NULL,
     payment_method VARCHAR(50),
     FOREIGN KEY (customer_id) REFERENCES customers(id),
-    FOREIGN KEY (product_id) REFERENCES products(id)
+    FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
 );
-
-ALTER TABLE sales
-DROP FOREIGN KEY sales_ibfk_2;
-
-ALTER TABLE sales
-ADD CONSTRAINT sales_ibfk_2
-  FOREIGN KEY (product_id)
-  REFERENCES products (id)
-  ON DELETE CASCADE;
 
 
 CREATE TABLE settings (
@@ -93,4 +87,4 @@ INSERT INTO settings (setting_key, value) VALUES
 ('shop_address', 'Your Shop Address'),
 ('shop_phone', 'Your Shop Phone');
 -- Insert a test user
-INSERT INTO users (email, password) VALUES ('admin@example.com', 'password123');
+INSERT INTO users (email, password, mobile_number, name) VALUES ('admin@example.com', 'password123', '1234567890', 'Admin User');

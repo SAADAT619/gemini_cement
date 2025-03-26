@@ -1,18 +1,20 @@
 <?php
+// dashboard.php
 session_start();
 if (!isset($_SESSION['user_email'])) {
     header("Location: login.php");
     exit();
 }
 include '../config/database.php';
-include '../core/functions.php';
+include '../core/functions.php'; // Include the functions.php file
 include '../includes/header.php';
 include '../includes/sidebar.php';
 
 // Fetch product stock and other dashboard data
-$products = getProductStock();
-$totalSales = getTotalSales();
-$monthlySales = getMonthlySales();
+$products = getProductStock($conn);
+$totalSales = getTotalSales($conn);
+$monthlySales = getMonthlySales($conn);
+
 ?>
 
 <h2>Dashboard</h2>
@@ -39,7 +41,7 @@ $monthlySales = getMonthlySales();
             foreach ($products as $product) {
                 echo "<tr>";
                 echo "<td>" . $product['name'] . "</td>";
-                echo "<td>" . getCategoryName($product['category_id']) . "</td>";
+                echo "<td>" . getCategoryName($product['category_id'], $conn) . "</td>";
                 echo "<td>" . $product['quantity'] . "</td>";
                 echo "<td>" . $product['price'] . "</td>";
                 echo "</tr>";

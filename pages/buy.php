@@ -30,7 +30,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         if ($conn->query($sql) === TRUE) {
             $message = "Purchase added successfully. Invoice Number: $invoice_number";
             $updateSql = "UPDATE products SET quantity = quantity + $quantity WHERE id = $product_id";
-            if($conn->query($updateSql) !== TRUE){
+            if ($conn->query($updateSql) !== TRUE) {
                 $error = "Error updating product quantity: " . $conn->error;
             }
 
@@ -54,7 +54,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                 $message = "Purchase deleted successfully";
                 //update product quantity
                 $updateProductSql = "UPDATE products SET quantity = quantity - $quantity_to_update WHERE id = $product_id_to_update";
-                if($conn->query($updateProductSql) !== TRUE){
+                if ($conn->query($updateProductSql) !== TRUE) {
                     $error = "Error updating product quantity: " . $conn->error;
                 }
             } else {
@@ -77,7 +77,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         $due = $total - $paid;
 
         $sql = "UPDATE purchases SET seller_id=$seller_id, product_id=$product_id, quantity=$quantity, price=$price, total=$total, 
-                    paid=$paid, due=$due, purchase_date='$purchase_date', payment_method='$payment_method' WHERE id=$id";
+                  paid=$paid, due=$due, purchase_date='$purchase_date', payment_method='$payment_method' WHERE id=$id";
 
         if ($conn->query($sql) === TRUE) {
             $message = "Purchase updated successfully";
@@ -91,7 +91,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             $quantityDifference = $quantity - $originalQuantity;
             if ($quantityDifference != 0) {
                 $updateProductQuantitySql = "UPDATE products SET quantity = quantity + $quantityDifference WHERE id = $originalProductId";
-                if($conn->query($updateProductQuantitySql) !== TRUE){
+                if ($conn->query($updateProductQuantitySql) !== TRUE) {
                     $error = "Error updating product quantity: " . $conn->error;
                 }
             }
@@ -111,10 +111,10 @@ $productResult = $conn->query($productSql);
 
 // Fetch purchases for listing
 $purchasesSql = "SELECT purchases.*, sellers.name as seller_name, products.name as product_name 
-                    FROM purchases 
-                    LEFT JOIN sellers ON purchases.seller_id = sellers.id 
-                    LEFT JOIN products ON purchases.product_id = products.id
-                    ORDER BY purchases.purchase_date DESC";
+                  FROM purchases 
+                  LEFT JOIN sellers ON purchases.seller_id = sellers.id 
+                  LEFT JOIN products ON purchases.product_id = products.id
+                  ORDER BY purchases.purchase_date DESC";
 $purchasesResult = $conn->query($purchasesSql);
 ?>
 
@@ -162,7 +162,7 @@ $purchasesResult = $conn->query($purchasesSql);
         <option value="cash">Cash</option>
         <option value="credit_card">Credit Card</option>
         <option value="bank_transfer">Bank Transfer</option>
-        <option value="other">Other</option>
+        <option value="other">Other"></option>
     </select><br>
     <button type="submit" name="add_purchase">Add Purchase</button>
 </form>
@@ -250,7 +250,7 @@ $purchasesResult = $conn->query($purchasesSql);
             <option value="cash">Cash</option>
             <option value="credit_card">Credit Card</option>
             <option value="bank_transfer">Bank Transfer</option>
-            <option value="other">Other</option>
+             <option value="other">Other</option>
         </select><br>
         <button type="submit" name="update_purchase">Update Purchase</button>
         <button type="button" onclick="document.getElementById('edit_purchase_form').style.display='none';">Cancel</button>

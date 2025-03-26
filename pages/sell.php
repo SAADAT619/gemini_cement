@@ -32,7 +32,9 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 
             //update product quantity
             $update_product_sql = "UPDATE products SET quantity = quantity - $quantity WHERE id = $product_id";
-            $conn->query($update_product_sql);
+            if ($conn->query($update_product_sql) !== TRUE) {
+                $error = "Error updating product quantity: " . $conn->error;
+            }
 
             header("Location: sell.php?message=" . urlencode($message));
             exit();
@@ -55,7 +57,9 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                 $message = "Sale deleted successfully";
                 //update product quantity
                 $updateProductSql = "UPDATE products SET quantity = quantity + $quantity_to_update WHERE id = $product_id_to_update";
-                $conn->query($updateProductSql);
+                if ($conn->query($updateProductSql) !== TRUE) {
+                    $error = "Error updating product quantity: " . $conn->error;
+                }
             } else {
                 $error = "Error deleting sale: " . $conn->error;
             }
@@ -92,7 +96,9 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 
             if ($quantityDifference != 0) {
                 $updateProductQuantitySql = "UPDATE products SET quantity = quantity - $quantityDifference WHERE id = $originalProductId";
-                $conn->query($updateProductQuantitySql);
+                if ($conn->query($updateProductQuantitySql) !== TRUE) {
+                    $error = "Error updating product quantity: " . $conn->error;
+                }
             }
         } else {
             $error = "Error updating sale: " . $conn->error;

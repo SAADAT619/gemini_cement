@@ -1,4 +1,9 @@
 <?php
+// core/functions.php
+
+//  This file should contain ALL your general helper functions.
+//  Make sure these functions are NOT defined in any other file.
+
 function sanitizeInput($data) {
     global $conn;
     return mysqli_real_escape_string($conn, trim($data));
@@ -8,48 +13,10 @@ function generateInvoiceNumber() {
     return "INV-" . date("YmdHis");
 }
 
-function getProductDetails($productId) {
-    global $conn;
-    $productId = sanitizeInput($productId);
-    $sql = "SELECT * FROM products WHERE id = $productId";
+function getCategoryName($category_id, $conn) {
+    $sql = "SELECT name FROM categories WHERE id = $category_id";
     $result = $conn->query($sql);
     if (!$result) {
-        error_log("getProductDetails Query Error: " . $conn->error); // Log the error
-        return null; // Or throw an exception
-    }
-    return $result->fetch_assoc();
-}
-
-function getSellerDetails($sellerId) {
-    global $conn;
-    $sellerId = sanitizeInput($sellerId);
-    $sql = "SELECT * FROM sellers WHERE id = $sellerId";
-    $result = $conn->query($sql);
-     if (!$result) {
-        error_log("getSellerDetails Query Error: " . $conn->error);
-        return null;
-    }
-    return $result->fetch_assoc();
-}
-
-function getCustomerDetails($customerId) {
-    global $conn;
-    $customerId = sanitizeInput($customerId);
-    $sql = "SELECT * FROM customers WHERE id = $customerId";
-    $result = $conn->query($sql);
-     if (!$result) {
-        error_log("getCustomerDetails Query Error: " . $conn->error);
-        return null;
-    }
-    return $result->fetch_assoc();
-}
-
-function getCategoryName($categoryId) {
-    global $conn;
-    $categoryId = sanitizeInput($categoryId);
-    $sql = "SELECT name FROM categories WHERE id = $categoryId";
-    $result = $conn->query($sql);
-     if (!$result) {
         error_log("getCategoryName Query Error: " . $conn->error);
         return null;
     }
@@ -58,11 +25,10 @@ function getCategoryName($categoryId) {
 }
 
 // Function to get total sales for the dashboard
-function getTotalSales() {
-    global $conn;
+function getTotalSales($conn) {
     $sql = "SELECT SUM(total) as total_sales FROM sales";
     $result = $conn->query($sql);
-     if (!$result) {
+    if (!$result) {
         error_log("getTotalSales Query Error: " . $conn->error);
         return 0;
     }
@@ -71,13 +37,12 @@ function getTotalSales() {
 }
 
 // Function to get monthly sales
-function getMonthlySales() {
-    global $conn;
+function getMonthlySales($conn) {
     $monthlySales = array();
     for ($month = 1; $month <= 12; $month++) {
         $sql = "SELECT SUM(total) as monthly_sale FROM sales WHERE MONTH(sale_date) = $month";
         $result = $conn->query($sql);
-         if (!$result) {
+        if (!$result) {
             error_log("getMonthlySales Query Error: " . $conn->error);
             $monthlySales[$month] = 0;
             continue;
@@ -89,11 +54,12 @@ function getMonthlySales() {
 }
 
 // Function to get product stock
-function getProductStock() {
-    global $conn;
-    $sql = "SELECT id, name, quantity, price, category_id FROM products";
+function getProductStock($conn) {
+    $sql = "SELECT p.id, p.name, p.category_id, p.quantity, p.price, c.name as category_name
+            FROM products p
+            LEFT JOIN categories c ON p.category_id = c.id";
     $result = $conn->query($sql);
-     if (!$result) {
+    if (!$result) {
         error_log("getProductStock Query Error: " . $conn->error);
         return [];
     }
@@ -107,12 +73,11 @@ function getProductStock() {
 }
 
 // Function to get shop settings
-function getShopSetting($key) {
-    global $conn;
+function getShopSetting($key, $conn) {
     $key = sanitizeInput($key);
     $sql = "SELECT value FROM settings WHERE setting_key = '$key'";
     $result = $conn->query($sql);
-     if (!$result) {
+    if (!$result) {
         error_log("getShopSetting Query Error: " . $conn->error);
         return '';
     }
@@ -124,8 +89,7 @@ function getShopSetting($key) {
 }
 
 // Function to update shop settings
-function updateShopSetting($key, $value) {
-    global $conn;
+function updateShopSetting($key, $value, $conn) {
     $key = sanitizeInput($key);
     $value = sanitizeInput($value);
     $sql = "UPDATE settings SET value = '$value' WHERE setting_key = '$key'";
