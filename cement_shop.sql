@@ -23,6 +23,7 @@ CREATE TABLE products (
     name VARCHAR(255) NOT NULL,
     price DECIMAL(10, 2) NOT NULL,
     quantity INT NOT NULL,
+    unit VARCHAR(50),  -- Added the 'unit' column
     FOREIGN KEY (category_id) REFERENCES categories(id)
 );
 
@@ -63,19 +64,26 @@ CREATE TABLE customers (
 CREATE TABLE sales (
     id INT AUTO_INCREMENT PRIMARY KEY,
     customer_id INT,
-    product_id INT,
-    quantity INT NOT NULL,
-    price DECIMAL(10, 2) NOT NULL,
-    total DECIMAL(10, 2) NOT NULL,
-    paid DECIMAL(10, 2) NOT NULL,
-    due DECIMAL(10, 2) NOT NULL,
     sale_date DATE NOT NULL,
     invoice_number VARCHAR(255) NOT NULL,
     payment_method VARCHAR(50),
-    FOREIGN KEY (customer_id) REFERENCES customers(id),
-    FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+    total DECIMAL(10,2) NOT NULL,
+    paid DECIMAL(10, 2) NOT NULL,
+    due DECIMAL(10, 2) NOT NULL,
+    FOREIGN KEY (customer_id) REFERENCES customers(id)
 );
 
+-- Table: sale_items
+CREATE TABLE sale_items (
+    id INT AUTO_INCREMENT PRIMARY KEY,
+    sale_id INT,
+    product_id INT,
+    quantity DECIMAL(10, 2) NOT NULL,
+    price DECIMAL(10, 2) NOT NULL,
+    subtotal DECIMAL(10,2) NOT NULL,
+    FOREIGN KEY (sale_id) REFERENCES sales(id) ON DELETE CASCADE,
+    FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE CASCADE
+);
 
 CREATE TABLE settings (
     setting_key VARCHAR(255) PRIMARY KEY,
