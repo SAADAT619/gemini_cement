@@ -112,15 +112,39 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 
         $conn->begin_transaction();
 
-        // 1. Delete old sale items
-        $delete_sale_items_sql = "DELETE FROM sale_items WHERE sale_id = $id";
-        if ($conn->query($delete_sale_items_sql) !== TRUE) {
-            $error = "Error deleting previous sale items: " . $conn->error;
+        // 1. Get the current sale items to restore product quantities
+        $get_sale_items_sql = "SELECT product_id, quantity FROM sale_items WHERE sale_id = $id";
+        $sale_items_result = $conn->query($get_sale_items_sql);
+
+        if ($sale_items_result && $sale_items_result->num_rows > 0) {
+            while ($sale_item_row = $sale_items_result->fetch_assoc()) {
+                $product_id_to_update = $sale_item_row['product_id'];
+                $quantity_to_update = $sale_item_row['quantity'];
+
+                // Restore the product quantity
+                $update_product_sql = "UPDATE products SET quantity = quantity + $quantity_to_update WHERE id = $product_id_to_update";
+                if ($conn->query($update_product_sql) !== TRUE) {
+                    $error = "Error restoring product quantity: " . $conn->error;
+                    $conn->rollback();
+                    break;
+                }
+            }
+        } else {
+            $error = "Error fetching sale items for stock restoration: " . $conn->error;
             $conn->rollback();
         }
 
+        // 2. Delete old sale items
+        if (!isset($error)) {
+            $delete_sale_items_sql = "DELETE FROM sale_items WHERE sale_id = $id";
+            if ($conn->query($delete_sale_items_sql) !== TRUE) {
+                $error = "Error deleting previous sale items: " . $conn->error;
+                $conn->rollback();
+            }
+        }
+
         $total = 0;
-        // 2. Insert new sale items and update product quantities
+        // 3. Insert new sale items and update product quantities
         if (!isset($error)) {
             for ($i = 0; $i < count($_POST['product_id']); $i++) {
                 $product_id = sanitizeInput($_POST['product_id'][$i]);
@@ -129,7 +153,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                 $subtotal = $quantity * $price;
 
                 $sql_sale_items = "INSERT INTO sale_items (sale_id, product_id, quantity, price, subtotal)
-                                    VALUES ($id, $product_id, $quantity, $price, $subtotal)";
+                                   VALUES ($id, $product_id, $quantity, $price, $subtotal)";
                 if ($conn->query($sql_sale_items) !== TRUE) {
                     $error = "Error adding sale items: " . $conn->error;
                     $conn->rollback();
@@ -146,13 +170,14 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                 $total += $subtotal;
             }
         }
+
         $due = $total - $paid;
-        // 3. Update sale
+        // 4. Update sale
         if (!isset($error)) {
             $sql_update_sale = "UPDATE sales 
-                            SET customer_id = $customer_id, sale_date = '$sale_date', 
-                            payment_method = '$payment_method', paid = $paid, total = $total, due = $due
-                            WHERE id = $id";
+                                SET customer_id = $customer_id, sale_date = '$sale_date', 
+                                payment_method = '$payment_method', paid = $paid, total = $total, due = $due
+                                WHERE id = $id";
 
             if ($conn->query($sql_update_sale) === TRUE) {
                 $conn->commit();
@@ -215,7 +240,6 @@ $saleItemsResult = $conn->query($saleItemsSql);
                 <?php
                 if (count($products) > 0) {
                     foreach ($products as $product) {
-                        // Display product name with stock in the dropdown
                         echo "<option value='" . $product['id'] . "'>" . $product['name'] . " (Stock: " . $product['quantity'] . ")</option>";
                     }
                 }
@@ -242,37 +266,6 @@ $saleItemsResult = $conn->query($saleItemsSql);
     </select><br>
     <button type="submit" name="add_sale">Add Sale</button>
 </form>
-
-<!-- Optional: Uncomment this section if you want to display a separate stock table -->
-<!--
-<h3>Current Product Stock</h3>
-<table>
-    <thead>
-        <tr>
-            <th>Product Name</th>
-            <th>Category</th>
-            <th>Quantity</th>
-            <th>Price</th>
-        </tr>
-    </thead>
-    <tbody>
-        <?php
-        if (count($products) > 0) {
-            foreach ($products as $product) {
-                echo "<tr>";
-                echo "<td>" . $product['name'] . "</td>";
-                echo "<td>" . getCategoryName($product['category_id'], $conn) . "</td>";
-                echo "<td>" . $product['quantity'] . "</td>";
-                echo "<td>" . $product['price'] . "</td>";
-                echo "</tr>";
-            }
-        } else {
-            echo "<tr><td colspan='4'>No products found</td></tr>";
-        }
-        ?>
-    </tbody>
-</table>
--->
 
 <hr>
 
@@ -351,7 +344,6 @@ $saleItemsResult = $conn->query($saleItemsSql);
                     <?php
                     if (count($products) > 0) {
                         foreach ($products as $product) {
-                            // Display product name with stock in the dropdown
                             echo "<option value='" . $product['id'] . "'>" . $product['name'] . " (Stock: " . $product['quantity'] . ")</option>";
                         }
                     }
@@ -435,7 +427,7 @@ $saleItemsResult = $conn->query($saleItemsSql);
     }
 
     function generateInvoice(invoiceNumber) {
-        window.location.href = "invoice_sell.php?invoice_number=" + invoiceNumber;
+        window.location.href = "invoice_sell.php?invoice_number=" + encodeURIComponent(invoiceNumber);
     }
 
     function editSale(id) {
@@ -445,39 +437,35 @@ $saleItemsResult = $conn->query($saleItemsSql);
         // Fetch sale details using AJAX
         var xhr = new XMLHttpRequest();
         xhr.onreadystatechange = function() {
-            if (xhr.readyState == 4 && xhr.status == 200) {
-                var response = JSON.parse(xhr.responseText);
-                populateCustomerDropdown(response.customer_id);
-                populateProductDropdown(id); // Pass sale ID to fetch products
-                document.getElementById('edit_sale_date').value = response.sale_date;
-                document.getElementById('edit_payment_method').value = response.payment_method;
-                document.getElementById('edit_paid').value = response.paid;
-                document.getElementById('edit_total').textContent = response.total.toFixed(2);
-                document.getElementById('edit_due').textContent = (response.total - response.paid).toFixed(2);
+            if (xhr.readyState == 4) {
+                if (xhr.status == 200) {
+                    try {
+                        var response = JSON.parse(xhr.responseText);
+                        if (response.error) {
+                            alert("Error: " + response.error);
+                            return;
+                        }
+
+                        // Populate the form fields
+                        document.getElementById('edit_customer_id').value = response.customer_id || '';
+                        document.getElementById('edit_sale_date').value = response.sale_date || '';
+                        document.getElementById('edit_payment_method').value = response.payment_method || '';
+                        document.getElementById('edit_paid').value = response.paid || 0;
+                        document.getElementById('edit_total').textContent = parseFloat(response.total || 0).toFixed(2);
+                        document.getElementById('edit_due').textContent = parseFloat(response.due || 0).toFixed(2);
+
+                        // Populate the product list
+                        populateProductDropdown(id);
+                    } catch (e) {
+                        alert("Error parsing sale details: " + e.message);
+                    }
+                } else {
+                    alert("Error fetching sale details: " + xhr.status + " " + xhr.statusText);
+                }
             }
         };
         xhr.open("GET", "get_sale_details.php?id=" + id, true);
         xhr.send();
-    }
-
-    function populateCustomerDropdown(selectedCustomerId) {
-        var customerDropdown = document.getElementById("edit_customer_id");
-        customerDropdown.innerHTML = '';
-        <?php
-        $customerSql = "SELECT * FROM customers";
-        $customerResult = $conn->query($customerSql);
-        if ($customerResult->num_rows > 0) {
-            while ($customerRow = $customerResult->fetch_assoc()) {
-                echo "var option = document.createElement('option');";
-                echo "option.value = '" . $customerRow['id'] . "';";
-                echo "option.text = '" . $customerRow['name'] . "';";
-                echo "if (" . $customerRow['id'] . " == selectedCustomerId) {";
-                echo " option.selected = true;";
-                echo "}";
-                echo "customerDropdown.appendChild(option);";
-            }
-        }
-        ?>
     }
 
     function populateProductDropdown(saleId) {
@@ -487,81 +475,103 @@ $saleItemsResult = $conn->query($saleItemsSql);
         // Fetch products associated with the sale
         var xhr = new XMLHttpRequest();
         xhr.onreadystatechange = function() {
-            if (xhr.readyState == 4 && xhr.status == 200) {
-                var response = JSON.parse(xhr.responseText);
-                var products = response.products;
-
-                for (var i = 0; i < products.length; i++) {
-                    var product = products[i];
-                    var productDiv = document.createElement('div');
-                    productDiv.className = 'product_item';
-
-                    var select = document.createElement('select');
-                    select.name = 'product_id[]';
-                    <?php
-                    if (count($products) > 0) {
-                        foreach ($products as $product) {
-                            echo "var option = document.createElement('option');";
-                            echo "option.value = '" . $product['id'] . "';";
-                            echo "option.text = '" . $product['name'] . " (Stock: " . $product['quantity'] . ")';";
-                            echo "if (" . $product['id'] . " == product.product_id) {";
-                            echo "option.selected = true;";
-                            echo "}";
-                            echo "select.appendChild(option);";
+            if (xhr.readyState == 4) {
+                if (xhr.status == 200) {
+                    try {
+                        var response = JSON.parse(xhr.responseText);
+                        if (response.error) {
+                            alert("Error: " + response.error);
+                            return;
                         }
+
+                        var products = response.products || [];
+                        if (products.length === 0) {
+                            // If no products, add a default empty row
+                            addProductRow(true);
+                            return;
+                        }
+
+                        for (var i = 0; i < products.length; i++) {
+                            var product = products[i];
+                            var productDiv = document.createElement('div');
+                            productDiv.className = 'product_item';
+
+                            var select = document.createElement('select');
+                            select.name = 'product_id[]';
+                            select.required = true;
+                            <?php
+                            if (count($products) > 0) {
+                                foreach ($products as $product) {
+                                    echo "var option = document.createElement('option');";
+                                    echo "option.value = '" . $product['id'] . "';";
+                                    echo "option.text = '" . $product['name'] . " (Stock: " . $product['quantity'] . ")';";
+                                    echo "if (" . $product['id'] . " == product.product_id) {";
+                                    echo "option.selected = true;";
+                                    echo "}";
+                                    echo "select.appendChild(option);";
+                                }
+                            }
+                            ?>
+
+                            var quantityInput = document.createElement('input');
+                            quantityInput.type = 'number';
+                            quantityInput.name = 'quantity[]';
+                            quantityInput.placeholder = 'Quantity';
+                            quantityInput.min = '0';
+                            quantityInput.step = '1';
+                            quantityInput.value = product.quantity || 0;
+                            quantityInput.required = true;
+                            quantityInput.addEventListener('input', function() { validateInput(this); calculateTotal(true); });
+
+                            var priceInput = document.createElement('input');
+                            priceInput.type = 'number';
+                            priceInput.name = 'price[]';
+                            priceInput.placeholder = 'Price';
+                            priceInput.min = '0';
+                            priceInput.step = '0.01';
+                            priceInput.value = product.price || 0;
+                            priceInput.required = true;
+                            priceInput.addEventListener('input', function() { validateInput(this); calculateTotal(true); });
+
+                            var subtotalSpan = document.createElement('span');
+                            var subtotal = (product.quantity || 0) * (product.price || 0);
+                            subtotalSpan.innerHTML = "Subtotal: <span class='subtotal'>" + parseFloat(subtotal).toFixed(2) + "</span>";
+
+                            var removeButton = document.createElement('button');
+                            removeButton.type = 'button';
+                            removeButton.className = 'remove_product';
+                            removeButton.textContent = '✖';
+                            removeButton.onclick = function() { removeProduct(this, true); };
+
+                            productDiv.appendChild(select);
+                            productDiv.appendChild(quantityInput);
+                            productDiv.appendChild(priceInput);
+                            productDiv.appendChild(subtotalSpan);
+                            productDiv.appendChild(removeButton);
+                            productDiv.appendChild(document.createElement('br'));
+                            productDropdown.appendChild(productDiv);
+                        }
+                        calculateTotal(true);
+                    } catch (e) {
+                        alert("Error parsing sale items: " + e.message);
                     }
-                    ?>
-                    var quantityInput = document.createElement('input');
-                    quantityInput.type = 'number';
-                    quantityInput.name = 'quantity[]';
-                    quantityInput.placeholder = 'Quantity';
-                    quantityInput.min = '0';
-                    quantityInput.step = '1';
-                    quantityInput.value = product.quantity;
-                    quantityInput.required = true;
-                    quantityInput.addEventListener('input', function() { validateInput(this); calculateTotal(true); });
-
-                    var priceInput = document.createElement('input');
-                    priceInput.type = 'number';
-                    priceInput.name = 'price[]';
-                    priceInput.placeholder = 'Price';
-                    priceInput.min = '0';
-                    priceInput.step = '0.01';
-                    priceInput.value = product.price;
-                    priceInput.required = true;
-                    priceInput.addEventListener('input', function() { validateInput(this); calculateTotal(true); });
-
-                    var subtotalSpan = document.createElement('span');
-                    subtotalSpan.innerHTML = "Subtotal: <span class='subtotal'>" + product.subtotal.toFixed(2) + "</span>";
-
-                    var removeButton = document.createElement('button');
-                    removeButton.type = 'button';
-                    removeButton.className = 'remove_product';
-                    removeButton.textContent = '✖';
-                    removeButton.onclick = function() { removeProduct(this, true); };
-
-                    productDiv.appendChild(select);
-                    productDiv.appendChild(quantityInput);
-                    productDiv.appendChild(priceInput);
-                    productDiv.appendChild(subtotalSpan);
-                    productDiv.appendChild(removeButton);
-                    productDiv.appendChild(document.createElement('br'));
-                    productDropdown.appendChild(productDiv);
+                } else {
+                    alert("Error fetching sale items: " + xhr.status + " " + xhr.statusText);
                 }
-                calculateTotal(true);
             }
         };
         xhr.open("GET", "get_sale_items.php?sale_id=" + saleId, true);
         xhr.send();
     }
 
-    document.getElementById('add_product').addEventListener('click', function() {
-        var productList = document.getElementById('product_list');
+    function addProductRow(isEdit = false) {
+        var productList = document.getElementById(isEdit ? 'edit_product_list' : 'product_list');
         var newProductItem = document.createElement('div');
         newProductItem.className = 'product_item';
 
         var select = document.createElement('select');
         select.name = 'product_id[]';
+        select.required = true;
         <?php
         if (count($products) > 0) {
             foreach ($products as $product) {
@@ -580,7 +590,7 @@ $saleItemsResult = $conn->query($saleItemsSql);
         quantityInput.min = '0';
         quantityInput.step = '1';
         quantityInput.required = true;
-        quantityInput.addEventListener('input', function() { validateInput(this); calculateTotal(); });
+        quantityInput.addEventListener('input', function() { validateInput(this); calculateTotal(isEdit); });
 
         var priceInput = document.createElement('input');
         priceInput.type = 'number';
@@ -589,7 +599,7 @@ $saleItemsResult = $conn->query($saleItemsSql);
         priceInput.min = '0';
         priceInput.step = '0.01';
         priceInput.required = true;
-        priceInput.addEventListener('input', function() { validateInput(this); calculateTotal(); });
+        priceInput.addEventListener('input', function() { validateInput(this); calculateTotal(isEdit); });
 
         var subtotalSpan = document.createElement('span');
         subtotalSpan.innerHTML = "Subtotal: <span class='subtotal'>0.00</span>";
@@ -598,7 +608,7 @@ $saleItemsResult = $conn->query($saleItemsSql);
         removeButton.type = 'button';
         removeButton.className = 'remove_product';
         removeButton.textContent = '✖';
-        removeButton.onclick = function() { removeProduct(this); };
+        removeButton.onclick = function() { removeProduct(this, isEdit); };
 
         newProductItem.appendChild(select);
         newProductItem.appendChild(quantityInput);
@@ -608,65 +618,15 @@ $saleItemsResult = $conn->query($saleItemsSql);
         newProductItem.appendChild(document.createElement('br'));
         productList.appendChild(newProductItem);
 
-        // Recalculate total after adding a new product
-        calculateTotal();
+        calculateTotal(isEdit);
+    }
+
+    document.getElementById('add_product').addEventListener('click', function() {
+        addProductRow(false);
     });
 
     document.getElementById('edit_add_product').addEventListener('click', function() {
-        var productList = document.getElementById('edit_product_list');
-        var newProductItem = document.createElement('div');
-        newProductItem.className = 'product_item';
-
-        var select = document.createElement('select');
-        select.name = 'product_id[]';
-        <?php
-        if (count($products) > 0) {
-            foreach ($products as $product) {
-                echo "var option = document.createElement('option');";
-                echo "option.value = '" . $product['id'] . "';";
-                echo "option.text = '" . $product['name'] . " (Stock: " . $product['quantity'] . ")';";
-                echo "select.appendChild(option);";
-            }
-        }
-        ?>
-
-        var quantityInput = document.createElement('input');
-        quantityInput.type = 'number';
-        quantityInput.name = 'quantity[]';
-        quantityInput.placeholder = 'Quantity';
-        quantityInput.min = '0';
-        quantityInput.step = '1';
-        quantityInput.required = true;
-        quantityInput.addEventListener('input', function() { validateInput(this); calculateTotal(true); });
-
-        var priceInput = document.createElement('input');
-        priceInput.type = 'number';
-        priceInput.name = 'price[]';
-        priceInput.placeholder = 'Price';
-        priceInput.min = '0';
-        priceInput.step = '0.01';
-        priceInput.required = true;
-        priceInput.addEventListener('input', function() { validateInput(this); calculateTotal(true); });
-
-        var subtotalSpan = document.createElement('span');
-        subtotalSpan.innerHTML = "Subtotal: <span class='subtotal'>0.00</span>";
-
-        var removeButton = document.createElement('button');
-        removeButton.type = 'button';
-        removeButton.className = 'remove_product';
-        removeButton.textContent = '✖';
-        removeButton.onclick = function() { removeProduct(this, true); };
-
-        newProductItem.appendChild(select);
-        newProductItem.appendChild(quantityInput);
-        newProductItem.appendChild(priceInput);
-        newProductItem.appendChild(subtotalSpan);
-        newProductItem.appendChild(removeButton);
-        newProductItem.appendChild(document.createElement('br'));
-        productList.appendChild(newProductItem);
-
-        // Recalculate total after adding a new product in edit mode
-        calculateTotal(true);
+        addProductRow(true);
     });
 </script>
 
