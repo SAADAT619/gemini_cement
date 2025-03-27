@@ -49,6 +49,7 @@ if ($monthlySales === false) {
             <th>Product Name</th>
             <th>Category</th>
             <th>Quantity</th>
+            <th>Unit</th>
             <th>Price</th>
             <th>Status</th>
         </tr>
@@ -57,17 +58,18 @@ if ($monthlySales === false) {
         <?php
         if (count($products) > 0) {
             foreach ($products as $product) {
-                $lowStock = $product['quantity'] <= 10; // Define low stock threshold as 10
+                $lowStock = $product['quantity'] <= 5; // Low stock threshold at 5
                 echo "<tr" . ($lowStock ? " class='low-stock'" : "") . ">";
                 echo "<td>" . htmlspecialchars($product['name']) . "</td>";
                 echo "<td>" . htmlspecialchars(getCategoryName($product['category_id'], $conn)) . "</td>";
                 echo "<td>" . htmlspecialchars($product['quantity']) . "</td>";
+                echo "<td>" . htmlspecialchars($product['unit'] ?? 'N/A') . "</td>";
                 echo "<td>" . number_format($product['price'], 2) . "</td>";
                 echo "<td>" . ($lowStock ? "<span class='low-stock-warning'>Low Stock</span>" : "In Stock") . "</td>";
                 echo "</tr>";
             }
         } else {
-            echo "<tr><td colspan='5'>No products found</td></tr>";
+            echo "<tr><td colspan='6'>No products found</td></tr>";
         }
         ?>
     </tbody>

@@ -14,7 +14,7 @@ if (empty($invoice_number)) {
 }
 
 // Fetch sale details
-$saleSql = "SELECT sales.*, customers.name as customer_name
+$saleSql = "SELECT sales.*, customers.name as customer_name, customers.phone, customers.address
             FROM sales
             LEFT JOIN customers ON sales.customer_id = customers.id
             WHERE sales.invoice_number = '$invoice_number'";
@@ -26,7 +26,7 @@ if (!$saleResult || $saleResult->num_rows == 0) {
 $sale = $saleResult->fetch_assoc();
 
 // Fetch sale items
-$saleItemsSql = "SELECT sale_items.*, products.name as product_name
+$saleItemsSql = "SELECT sale_items.*, products.name as product_name, products.unit
                  FROM sale_items
                  LEFT JOIN products ON sale_items.product_id = products.id
                  WHERE sale_items.sale_id = " . $sale['id'];
@@ -36,28 +36,57 @@ if (!$saleItemsResult) {
     die("Error fetching sale items: " . $conn->error);
 }
 
-// Load shop details from a configuration file
-$shopDetailsFile = '../config/shop_details.php';
-$defaultShopDetails = [
-    'shop_name' => 'Gemini Cement Shop',
-    'mobile' => '123-456-7890',
-    'address' => '123 Cement Road, City, Country'
+// Fetch shop details from the settings table
+$shopDetails = [
+    'shop_name' => 'Your Shop Name',
+    'shop_phone' => 'Your Shop Phone',
+    'shop_address' => 'Your Shop Address'
 ];
 
-// Check if shop details file exists, if not create it with default values
-if (!file_exists($shopDetailsFile)) {
-    file_put_contents($shopDetailsFile, '<?php return ' . var_export($defaultShopDetails, true) . ';');
+// Fetch settings from the database
+$settingsSql = "SELECT setting_key, value FROM settings WHERE setting_key IN ('shop_name', 'shop_phone', 'shop_address')";
+$settingsResult = $conn->query($settingsSql);
+
+if ($settingsResult && $settingsResult->num_rows > 0) {
+    while ($row = $settingsResult->fetch_assoc()) {
+        if ($row['setting_key'] == 'shop_name') {
+            $shopDetails['shop_name'] = $row['value'];
+        } elseif ($row['setting_key'] == 'shop_phone') {
+            $shopDetails['shop_phone'] = $row['value'];
+        } elseif ($row['setting_key'] == 'shop_address') {
+            $shopDetails['shop_address'] = $row['value'];
+        }
+    }
 }
-$shopDetails = include $shopDetailsFile;
 
 // Handle shop details update
 if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['update_shop_details'])) {
-    $shopDetails['shop_name'] = sanitizeInput($_POST['shop_name']);
-    $shopDetails['mobile'] = sanitizeInput($_POST['mobile']);
-    $shopDetails['address'] = sanitizeInput($_POST['address']);
-    file_put_contents($shopDetailsFile, '<?php return ' . var_export($shopDetails, true) . ';');
-    header("Location: invoice_sell.php?invoice_number=" . urlencode($invoice_number));
-    exit();
+    $shop_name = sanitizeInput($_POST['shop_name']);
+    $shop_phone = sanitizeInput($_POST['shop_phone']);
+    $shop_address = sanitizeInput($_POST['shop_address']);
+
+    // Update settings in the database
+    $conn->begin_transaction();
+    $updateSuccess = true;
+
+    if (!updateShopSetting('shop_name', $shop_name, $conn)) {
+        $updateSuccess = false;
+    }
+    if (!updateShopSetting('shop_phone', $shop_phone, $conn)) {
+        $updateSuccess = false;
+    }
+    if (!updateShopSetting('shop_address', $shop_address, $conn)) {
+        $updateSuccess = false;
+    }
+
+    if ($updateSuccess) {
+        $conn->commit();
+        header("Location: invoice_sell.php?invoice_number=" . urlencode($invoice_number));
+        exit();
+    } else {
+        $conn->rollback();
+        echo "Error updating shop details: " . $conn->error;
+    }
 }
 ?>
 
@@ -233,13 +262,15 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['update_shop_details'])
 
         <div class="shop-details">
             <h2><?php echo htmlspecialchars($shopDetails['shop_name']); ?></h2>
-            <p>Mobile: <?php echo htmlspecialchars($shopDetails['mobile']); ?></p>
-            <p>Address: <?php echo htmlspecialchars($shopDetails['address']); ?></p>
+            <p>Mobile: <?php echo htmlspecialchars($shopDetails['shop_phone']); ?></p>
+            <p>Address: <?php echo htmlspecialchars($shopDetails['shop_address']); ?></p>
         </div>
 
         <div class="invoice-details">
             <div>
                 <p><strong>Customer:</strong> <?php echo htmlspecialchars($sale['customer_name']); ?></p>
+                <p><strong>Phone:</strong> <?php echo htmlspecialchars($sale['phone'] ?? 'N/A'); ?></p>
+                <p><strong>Address:</strong> <?php echo htmlspecialchars($sale['address'] ?? 'N/A'); ?></p>
                 <p><strong>Sale Date:</strong> <?php echo htmlspecialchars($sale['sale_date']); ?></p>
             </div>
             <div>
@@ -252,6 +283,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['update_shop_details'])
                 <tr>
                     <th>Product</th>
                     <th>Quantity</th>
+                    <th>Unit</th>
                     <th>Price</th>
                     <th>Subtotal</th>
                 </tr>
@@ -262,13 +294,14 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['update_shop_details'])
                     while ($item = $saleItemsResult->fetch_assoc()) {
                         echo "<tr>";
                         echo "<td>" . htmlspecialchars($item['product_name']) . "</td>";
-                        echo "<td>" . htmlspecialchars($item['quantity']) . "</td>";
+                        echo "<td>" . number_format($item['quantity'], 2) . "</td>";
+                        echo "<td>" . htmlspecialchars($item['unit'] ?? 'N/A') . "</td>";
                         echo "<td>" . number_format($item['price'], 2) . "</td>";
                         echo "<td>" . number_format($item['subtotal'], 2) . "</td>";
                         echo "</tr>";
                     }
                 } else {
-                    echo "<tr><td colspan='4'>No items found</td></tr>";
+                    echo "<tr><td colspan='5'>No items found for this sale.</td></tr>";
                 }
                 ?>
             </tbody>
@@ -284,8 +317,8 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['update_shop_details'])
             <h3>Edit Shop Details</h3>
             <form method="post">
                 <input type="text" name="shop_name" value="<?php echo htmlspecialchars($shopDetails['shop_name']); ?>" placeholder="Shop Name" required>
-                <input type="text" name="mobile" value="<?php echo htmlspecialchars($shopDetails['mobile']); ?>" placeholder="Mobile Phone" required>
-                <textarea name="address" placeholder="Address" required><?php echo htmlspecialchars($shopDetails['address']); ?></textarea>
+                <input type="text" name="shop_phone" value="<?php echo htmlspecialchars($shopDetails['shop_phone']); ?>" placeholder="Shop Phone" required>
+                <textarea name="shop_address" placeholder="Shop Address" required><?php echo htmlspecialchars($shopDetails['shop_address']); ?></textarea>
                 <button type="submit" name="update_shop_details">Update Shop Details</button>
             </form>
         </div>

@@ -9,6 +9,17 @@ include '../core/functions.php';
 include '../includes/header.php';
 include '../includes/sidebar.php';
 
+// Function to check if stock is sufficient
+function checkStockAvailability($conn, $product_id, $quantity) {
+    $sql = "SELECT quantity FROM products WHERE id = $product_id";
+    $result = $conn->query($sql);
+    if ($result && $result->num_rows > 0) {
+        $product = $result->fetch_assoc();
+        return $product['quantity'] >= $quantity;
+    }
+    return false;
+}
+
 // Handle sale form submissions
 if ($_SERVER["REQUEST_METHOD"] == "POST") {
     if (isset($_POST['add_sale'])) {
@@ -18,53 +29,67 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         $invoice_number = generateInvoiceNumber();
         $paid = sanitizeInput($_POST['paid']);
 
-        // 1. Insert into 'sales' table
-        $sql_sales = "INSERT INTO sales (customer_id, sale_date, invoice_number, payment_method, paid, total, due)
-                      VALUES ($customer_id, '$sale_date', '$invoice_number', '$payment_method', $paid, 0, 0)";
+        // Validate stock availability before proceeding
+        $stock_error = false;
+        for ($i = 0; $i < count($_POST['product_id']); $i++) {
+            $product_id = sanitizeInput($_POST['product_id'][$i]);
+            $quantity = floatval(sanitizeInput($_POST['quantity'][$i])); // Handle decimal quantities
+            if (!checkStockAvailability($conn, $product_id, $quantity)) {
+                $stock_error = true;
+                $error = "Insufficient stock for product ID $product_id. Requested: $quantity, Available: " . getProductStockById($conn, $product_id)['quantity'];
+                break;
+            }
+        }
 
-        if ($conn->query($sql_sales) === TRUE) {
-            $sale_id = $conn->insert_id; // Get the ID of the new sale
-            $total = 0;
+        if (!$stock_error) {
+            // 1. Insert into 'sales' table
+            $sql_sales = "INSERT INTO sales (customer_id, sale_date, invoice_number, payment_method, paid, total, due)
+                          VALUES ($customer_id, '$sale_date', '$invoice_number', '$payment_method', $paid, 0, 0)";
 
-            // 2. Insert into 'sale_items' table
-            for ($i = 0; $i < count($_POST['product_id']); $i++) {
-                $product_id = sanitizeInput($_POST['product_id'][$i]);
-                $quantity = sanitizeInput($_POST['quantity'][$i]);
-                $price = sanitizeInput($_POST['price'][$i]);
-                $subtotal = $quantity * $price;
+            if ($conn->query($sql_sales) === TRUE) {
+                $sale_id = $conn->insert_id; // Get the ID of the new sale
+                $total = 0;
 
-                $sql_sale_items = "INSERT INTO sale_items (sale_id, product_id, quantity, price, subtotal)
-                                   VALUES ($sale_id, $product_id, $quantity, $price, $subtotal)";
+                // 2. Insert into 'sale_items' table
+                for ($i = 0; $i < count($_POST['product_id']); $i++) {
+                    $product_id = sanitizeInput($_POST['product_id'][$i]);
+                    $quantity = floatval(sanitizeInput($_POST['quantity'][$i])); // Handle decimal quantities
+                    $price = floatval(sanitizeInput($_POST['price'][$i]));
+                    $subtotal = $quantity * $price;
 
-                if ($conn->query($sql_sale_items) !== TRUE) {
-                    $error = "Error adding sale item: " . $conn->error;
-                    break; // Stop the loop on error
+                    $sql_sale_items = "INSERT INTO sale_items (sale_id, product_id, quantity, price, subtotal)
+                                       VALUES ($sale_id, $product_id, $quantity, $price, $subtotal)";
+
+                    if ($conn->query($sql_sale_items) !== TRUE) {
+                        $error = "Error adding sale item: " . $conn->error;
+                        break; // Stop the loop on error
+                    }
+
+                    // 3. Update product quantity
+                    $update_product_sql = "UPDATE products SET quantity = GREATEST(quantity - $quantity, 0) WHERE id = $product_id";
+                    if ($conn->query($update_product_sql) !== TRUE) {
+                        $error = "Error updating product quantity: " . $conn->error;
+                        break; // Stop the loop on error
+                    }
+
+                    $total += $subtotal; // Accumulate the subtotal
                 }
 
-                // 3. Update product quantity
-                $update_product_sql = "UPDATE products SET quantity = quantity - $quantity WHERE id = $product_id";
-                if ($conn->query($update_product_sql) !== TRUE) {
-                    $error = "Error updating product quantity: " . $conn->error;
-                    break; // Stop the loop on error
+                // 4. Update the 'sales' table with the total and due
+                $due = $total - $paid;
+                $update_sales_total_sql = "UPDATE sales SET total = $total, due = $due WHERE id = $sale_id";
+                if ($conn->query($update_sales_total_sql) !== TRUE) {
+                    $error = "Error updating sale total: " . $conn->error;
                 }
 
-                $total += $subtotal; // Accumulate the subtotal
+                if (!isset($error)) { // Only redirect if there were no errors
+                    $message = "Sale added successfully. Invoice Number: $invoice_number";
+                    header("Location: sell.php?message=" . urlencode($message));
+                    exit();
+                }
+            } else {
+                $error = "Error adding sale: " . $conn->error;
             }
-
-            // 4. Update the 'sales' table with the total and due
-            $due = $total - $paid;
-            $update_sales_total_sql = "UPDATE sales SET total = $total, due = $due WHERE id = $sale_id";
-            if ($conn->query($update_sales_total_sql) !== TRUE) {
-                $error = "Error updating sale total: " . $conn->error;
-            }
-
-            if (!isset($error)) { // Only redirect if there were no errors
-                $message = "Sale added successfully. Invoice Number: $invoice_number";
-                header("Location: sell.php?message=" . urlencode($message));
-                exit();
-            }
-        } else {
-            $error = "Error adding sale: " . $conn->error;
         }
     } elseif (isset($_POST['delete_sale'])) {
         $id = sanitizeInput($_POST['id']);
@@ -76,7 +101,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         if ($sale_items_result && $sale_items_result->num_rows > 0) {
             while ($sale_item_row = $sale_items_result->fetch_assoc()) {
                 $product_id_to_update = $sale_item_row['product_id'];
-                $quantity_to_update = $sale_item_row['quantity'];
+                $quantity_to_update = floatval($sale_item_row['quantity']); // Handle decimal quantities
 
                 // 2. Update product quantity in 'products' table
                 $update_product_sql = "UPDATE products SET quantity = quantity + $quantity_to_update WHERE id = $product_id_to_update";
@@ -119,7 +144,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         if ($sale_items_result && $sale_items_result->num_rows > 0) {
             while ($sale_item_row = $sale_items_result->fetch_assoc()) {
                 $product_id_to_update = $sale_item_row['product_id'];
-                $quantity_to_update = $sale_item_row['quantity'];
+                $quantity_to_update = floatval($sale_item_row['quantity']); // Handle decimal quantities
 
                 // Restore the product quantity
                 $update_product_sql = "UPDATE products SET quantity = quantity + $quantity_to_update WHERE id = $product_id_to_update";
@@ -134,8 +159,23 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             $conn->rollback();
         }
 
-        // 2. Delete old sale items
+        // 2. Validate stock availability for new quantities
+        $stock_error = false;
         if (!isset($error)) {
+            for ($i = 0; $i < count($_POST['product_id']); $i++) {
+                $product_id = sanitizeInput($_POST['product_id'][$i]);
+                $quantity = floatval(sanitizeInput($_POST['quantity'][$i])); // Handle decimal quantities
+                if (!checkStockAvailability($conn, $product_id, $quantity)) {
+                    $stock_error = true;
+                    $error = "Insufficient stock for product ID $product_id. Requested: $quantity, Available: " . getProductStockById($conn, $product_id)['quantity'];
+                    $conn->rollback();
+                    break;
+                }
+            }
+        }
+
+        // 3. Delete old sale items
+        if (!isset($error) && !$stock_error) {
             $delete_sale_items_sql = "DELETE FROM sale_items WHERE sale_id = $id";
             if ($conn->query($delete_sale_items_sql) !== TRUE) {
                 $error = "Error deleting previous sale items: " . $conn->error;
@@ -144,24 +184,24 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         }
 
         $total = 0;
-        // 3. Insert new sale items and update product quantities
-        if (!isset($error)) {
+        // 4. Insert new sale items and update product quantities
+        if (!isset($error) && !$stock_error) {
             for ($i = 0; $i < count($_POST['product_id']); $i++) {
                 $product_id = sanitizeInput($_POST['product_id'][$i]);
-                $quantity = sanitizeInput($_POST['quantity'][$i]);
-                $price = sanitizeInput($_POST['price'][$i]);
+                $quantity = floatval(sanitizeInput($_POST['quantity'][$i])); // Handle decimal quantities
+                $price = floatval(sanitizeInput($_POST['price'][$i]));
                 $subtotal = $quantity * $price;
 
                 $sql_sale_items = "INSERT INTO sale_items (sale_id, product_id, quantity, price, subtotal)
-                                   VALUES ($id, $product_id, $quantity, $price, $subtotal)";
+                                   VALUES ($sale_id, $product_id, $quantity, $price, $subtotal)";
                 if ($conn->query($sql_sale_items) !== TRUE) {
                     $error = "Error adding sale items: " . $conn->error;
                     $conn->rollback();
                     break;
                 }
 
-                // Update product quantity
-                $update_product_sql = "UPDATE products SET quantity = quantity - $quantity WHERE id = $product_id";
+                // Update product quantity, ensuring it doesn't go below 0
+                $update_product_sql = "UPDATE products SET quantity = GREATEST(quantity - $quantity, 0) WHERE id = $product_id";
                 if ($conn->query($update_product_sql) !== TRUE) {
                     $error = "Error updating product quantity: " . $conn->error;
                     $conn->rollback();
@@ -172,8 +212,8 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         }
 
         $due = $total - $paid;
-        // 4. Update sale
-        if (!isset($error)) {
+        // 5. Update sale
+        if (!isset($error) && !$stock_error) {
             $sql_update_sale = "UPDATE sales 
                                 SET customer_id = $customer_id, sale_date = '$sale_date', 
                                 payment_method = '$payment_method', paid = $paid, total = $total, due = $due
@@ -240,12 +280,12 @@ $saleItemsResult = $conn->query($saleItemsSql);
                 <?php
                 if (count($products) > 0) {
                     foreach ($products as $product) {
-                        echo "<option value='" . $product['id'] . "'>" . $product['name'] . " (Stock: " . $product['quantity'] . ")</option>";
+                        echo "<option value='" . $product['id'] . "'>" . $product['name'] . " (Stock: " . $product['quantity'] . " " . ($product['unit'] ?? '') . ")</option>";
                     }
                 }
                 ?>
             </select>
-            <input type="number" name="quantity[]" placeholder="Quantity" min="0" step="1" required oninput="validateInput(this); calculateTotal()">
+            <input type="number" name="quantity[]" placeholder="Quantity" min="0" step="0.01" required oninput="validateInput(this); calculateTotal()">
             <input type="number" name="price[]" placeholder="Price" min="0" step="0.01" required oninput="validateInput(this); calculateTotal()">
             <span>Subtotal: <span class="subtotal">0.00</span></span>
             <button type="button" class="remove_product" onclick="removeProduct(this)">✖</button><br>
@@ -344,12 +384,12 @@ $saleItemsResult = $conn->query($saleItemsSql);
                     <?php
                     if (count($products) > 0) {
                         foreach ($products as $product) {
-                            echo "<option value='" . $product['id'] . "'>" . $product['name'] . " (Stock: " . $product['quantity'] . ")</option>";
+                            echo "<option value='" . $product['id'] . "'>" . $product['name'] . " (Stock: " . $product['quantity'] . " " . ($product['unit'] ?? '') . ")</option>";
                         }
                     }
                     ?>
                 </select>
-                <input type="number" name="quantity[]" placeholder="Quantity" min="0" step="1" required oninput="validateInput(this); calculateTotal(true)">
+                <input type="number" name="quantity[]" placeholder="Quantity" min="0" step="0.01" required oninput="validateInput(this); calculateTotal(true)">
                 <input type="number" name="price[]" placeholder="Price" min="0" step="0.01" required oninput="validateInput(this); calculateTotal(true)">
                 <span>Subtotal: <span class="subtotal">0.00</span></span>
                 <button type="button" class="remove_product" onclick="removeProduct(this, true)">✖</button><br>
@@ -504,7 +544,7 @@ $saleItemsResult = $conn->query($saleItemsSql);
                                 foreach ($products as $product) {
                                     echo "var option = document.createElement('option');";
                                     echo "option.value = '" . $product['id'] . "';";
-                                    echo "option.text = '" . $product['name'] . " (Stock: " . $product['quantity'] . ")';";
+                                    echo "option.text = '" . $product['name'] . " (Stock: " . $product['quantity'] . " " . ($product['unit'] ?? '') . ")';";
                                     echo "if (" . $product['id'] . " == product.product_id) {";
                                     echo "option.selected = true;";
                                     echo "}";
@@ -518,7 +558,7 @@ $saleItemsResult = $conn->query($saleItemsSql);
                             quantityInput.name = 'quantity[]';
                             quantityInput.placeholder = 'Quantity';
                             quantityInput.min = '0';
-                            quantityInput.step = '1';
+                            quantityInput.step = '0.01';
                             quantityInput.value = product.quantity || 0;
                             quantityInput.required = true;
                             quantityInput.addEventListener('input', function() { validateInput(this); calculateTotal(true); });
@@ -531,7 +571,7 @@ $saleItemsResult = $conn->query($saleItemsSql);
                             priceInput.step = '0.01';
                             priceInput.value = product.price || 0;
                             priceInput.required = true;
-                            priceInput.addEventListener('input', function() { validateInput(this); calculateTotal(true); });
+                            quantityInput.addEventListener('input', function() { validateInput(this); calculateTotal(true); });
 
                             var subtotalSpan = document.createElement('span');
                             var subtotal = (product.quantity || 0) * (product.price || 0);
@@ -577,7 +617,7 @@ $saleItemsResult = $conn->query($saleItemsSql);
             foreach ($products as $product) {
                 echo "var option = document.createElement('option');";
                 echo "option.value = '" . $product['id'] . "';";
-                echo "option.text = '" . $product['name'] . " (Stock: " . $product['quantity'] . ")';";
+                echo "option.text = '" . $product['name'] . " (Stock: " . $product['quantity'] . " " . ($product['unit'] ?? '') . ")';";
                 echo "select.appendChild(option);";
             }
         }
@@ -588,7 +628,7 @@ $saleItemsResult = $conn->query($saleItemsSql);
         quantityInput.name = 'quantity[]';
         quantityInput.placeholder = 'Quantity';
         quantityInput.min = '0';
-        quantityInput.step = '1';
+        quantityInput.step = '0.01';
         quantityInput.required = true;
         quantityInput.addEventListener('input', function() { validateInput(this); calculateTotal(isEdit); });
 
@@ -645,6 +685,20 @@ $saleItemsResult = $conn->query($saleItemsSql);
     input[type="number"] {
         width: 100px;
         padding: 5px;
+    }
+    .success {
+        color: green;
+        background-color: #e0f7fa;
+        padding: 10px;
+        border-radius: 4px;
+        margin-bottom: 20px;
+    }
+    .error {
+        color: #d32f2f;
+        background-color: #ffebee;
+        padding: 10px;
+        border-radius: 4px;
+        margin-bottom: 20px;
     }
 </style>
 
