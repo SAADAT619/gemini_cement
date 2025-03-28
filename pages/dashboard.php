@@ -16,17 +16,46 @@ if ($products === false) {
     $error = "Error fetching product stock: " . $conn->error;
 }
 
-$totalSales = getTotalSales($conn);
-if ($totalSales === false) {
-    $totalSales = 0;
-    $error = isset($error) ? $error . "<br>Error fetching total sales: " . $conn->error : "Error fetching total sales: " . $conn->error;
-}
+// Fetch the low stock threshold from settings
+$lowStockThresholdSql = "SELECT value FROM settings WHERE setting_key = 'low_stock_threshold'";
+$lowStockThresholdResult = $conn->query($lowStockThresholdSql);
+$lowStockThreshold = $lowStockThresholdResult && $lowStockThresholdResult->num_rows > 0 ? (int)$lowStockThresholdResult->fetch_assoc()['value'] : 5;
 
-$monthlySales = getMonthlySales($conn);
-if ($monthlySales === false) {
-    $monthlySales = array_fill(1, 12, 0); // Default to 0 for each month
-    $error = isset($error) ? $error . "<br>Error fetching monthly sales: " . $conn->error : "Error fetching monthly sales: " . $conn->error;
-}
+// Fetch daily sales amount (for today)
+$today = date('Y-m-d');
+$dailySalesSql = "SELECT SUM(total) as daily_sales FROM sales WHERE DATE(sale_date) = '$today'";
+$dailySalesResult = $conn->query($dailySalesSql);
+$dailySales = $dailySalesResult && $dailySalesResult->num_rows > 0 ? $dailySalesResult->fetch_assoc()['daily_sales'] : 0;
+
+// Fetch monthly sales amount (for the current month)
+$currentMonth = date('Y-m');
+$monthlySalesSql = "SELECT SUM(total) as monthly_sales FROM sales WHERE DATE_FORMAT(sale_date, '%Y-%m') = '$currentMonth'";
+$monthlySalesResult = $conn->query($monthlySalesSql);
+$monthlySales = $monthlySalesResult && $monthlySalesResult->num_rows > 0 ? $monthlySalesResult->fetch_assoc()['monthly_sales'] : 0;
+
+// Fetch daily buy amount (for today)
+$dailyBuySql = "SELECT SUM(total) as daily_buy FROM purchases WHERE DATE(purchase_date) = '$today'";
+$dailyBuyResult = $conn->query($dailyBuySql);
+$dailyBuy = $dailyBuyResult && $dailyBuyResult->num_rows > 0 ? $dailyBuyResult->fetch_assoc()['daily_buy'] : 0;
+
+// Fetch monthly buy amount (for the current month)
+$monthlyBuySql = "SELECT SUM(total) as monthly_buy FROM purchases WHERE DATE_FORMAT(purchase_date, '%Y-%m') = '$currentMonth'";
+$monthlyBuyResult = $conn->query($monthlyBuySql);
+$monthlyBuy = $monthlyBuyResult && $monthlyBuyResult->num_rows > 0 ? $monthlyBuyResult->fetch_assoc()['monthly_buy'] : 0;
+
+// Fetch total due amount
+$totalDueSql = "SELECT SUM(due) as total_due FROM sales";
+$totalDueResult = $conn->query($totalDueSql);
+$totalDue = $totalDueResult && $totalDueResult->num_rows > 0 ? $totalDueResult->fetch_assoc()['total_due'] : 0;
+
+// Fetch top 5 customers by total sales
+$topCustomersSql = "SELECT c.id, c.name, SUM(s.total) as total_sales 
+                    FROM customers c 
+                    JOIN sales s ON c.id = s.customer_id 
+                    GROUP BY c.id, c.name 
+                    ORDER BY total_sales DESC 
+                    LIMIT 5";
+$topCustomersResult = $conn->query($topCustomersSql);
 ?>
 
 <h2>Dashboard</h2>
@@ -37,10 +66,50 @@ if ($monthlySales === false) {
 
 <div class="dashboard-summary">
     <div class="summary-card">
-        <h3>Total Sales</h3>
-        <p><?php echo number_format($totalSales, 2); ?></p>
+        <h3>Daily Sales</h3>
+        <p><?php echo number_format($dailySales, 2); ?></p>
+    </div>
+    <div class="summary-card">
+        <h3>Monthly Sales</h3>
+        <p><?php echo number_format($monthlySales, 2); ?></p>
+    </div>
+    <div class="summary-card">
+        <h3>Daily Buy</h3>
+        <p><?php echo number_format($dailyBuy, 2); ?></p>
+    </div>
+    <div class="summary-card">
+        <h3>Monthly Buy</h3>
+        <p><?php echo number_format($monthlyBuy, 2); ?></p>
+    </div>
+    <div class="summary-card">
+        <h3>Total Due</h3>
+        <p><?php echo number_format($totalDue, 2); ?></p>
     </div>
 </div>
+
+<h3>Top 5 Customers by Sales</h3>
+<table>
+    <thead>
+        <tr>
+            <th>Customer Name</th>
+            <th>Total Sales</th>
+        </tr>
+    </thead>
+    <tbody>
+        <?php
+        if ($topCustomersResult && $topCustomersResult->num_rows > 0) {
+            while ($customer = $topCustomersResult->fetch_assoc()) {
+                echo "<tr>";
+                echo "<td>" . htmlspecialchars($customer['name']) . "</td>";
+                echo "<td>" . number_format($customer['total_sales'], 2) . "</td>";
+                echo "</tr>";
+            }
+        } else {
+            echo "<tr><td colspan='2'>No customers found</td></tr>";
+        }
+        ?>
+    </tbody>
+</table>
 
 <h3>Product Stock</h3>
 <table>
@@ -58,7 +127,7 @@ if ($monthlySales === false) {
         <?php
         if (count($products) > 0) {
             foreach ($products as $product) {
-                $lowStock = $product['quantity'] <= 5; // Low stock threshold at 5
+                $lowStock = $product['quantity'] <= $lowStockThreshold;
                 echo "<tr" . ($lowStock ? " class='low-stock'" : "") . ">";
                 echo "<td>" . htmlspecialchars($product['name']) . "</td>";
                 echo "<td>" . htmlspecialchars(getCategoryName($product['category_id'], $conn)) . "</td>";
@@ -74,68 +143,6 @@ if ($monthlySales === false) {
         ?>
     </tbody>
 </table>
-
-<h3>Monthly Sales</h3>
-<canvas id="monthlySalesChart" width="400" height="200"></canvas>
-
-<!-- Include Chart.js library -->
-<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-<script>
-const ctx = document.getElementById('monthlySalesChart').getContext('2d');
-const myChart = new Chart(ctx, {
-    type: 'bar',
-    data: {
-        labels: ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'],
-        datasets: [{
-            label: 'Monthly Sales',
-            data: [
-                <?php echo $monthlySales[1] ?? 0; ?>, <?php echo $monthlySales[2] ?? 0; ?>, <?php echo $monthlySales[3] ?? 0; ?>,
-                <?php echo $monthlySales[4] ?? 0; ?>, <?php echo $monthlySales[5] ?? 0; ?>, <?php echo $monthlySales[6] ?? 0; ?>,
-                <?php echo $monthlySales[7] ?? 0; ?>, <?php echo $monthlySales[8] ?? 0; ?>, <?php echo $monthlySales[9] ?? 0; ?>,
-                <?php echo $monthlySales[10] ?? 0; ?>, <?php echo $monthlySales[11] ?? 0; ?>, <?php echo $monthlySales[12] ?? 0; ?>
-            ],
-            backgroundColor: [
-                'rgba(255, 99, 132, 0.2)',
-                'rgba(54, 162, 235, 0.2)',
-                'rgba(255, 206, 86, 0.2)',
-                'rgba(75, 192, 192, 0.2)',
-                'rgba(153, 102, 255, 0.2)',
-                'rgba(255, 159, 64, 0.2)',
-                'rgba(255, 99, 132, 0.2)',
-                'rgba(54, 162, 235, 0.2)',
-                'rgba(255, 206, 86, 0.2)',
-                'rgba(75, 192, 192, 0.2)',
-                'rgba(153, 102, 255, 0.2)',
-                'rgba(255, 159, 64, 0.2)'
-            ],
-            borderColor: [
-                'rgba(255, 99, 132, 1)',
-                'rgba(54, 162, 235, 1)',
-                'rgba(255, 206, 86, 1)',
-                'rgba(75, 192, 192, 1)',
-                'rgba(153, 102, 255, 1)',
-                'rgba(255, 159, 64, 1)',
-                'rgba(255, 99, 132, 1)',
-                'rgba(54, 162, 235, 1)',
-                'rgba(255, 206, 86, 1)',
-                'rgba(75, 192, 192, 1)',
-                'rgba(153, 102, 255, 1)',
-                'rgba(255, 159, 64, 1)'
-            ],
-            borderWidth: 1
-        }]
-    },
-    options: {
-        scales: {
-            y: {
-                beginAtZero: true
-            }
-        },
-        responsive: true,
-        maintainAspectRatio: false
-    }
-});
-</script>
 
 <style>
 /* General styling for the dashboard */
@@ -166,7 +173,7 @@ const myChart = new Chart(ctx, {
     margin: 0;
 }
 
-/* Product stock table styling */
+/* Table styling */
 table {
     width: 100%;
     border-collapse: collapse;
@@ -201,20 +208,13 @@ tr:hover {
     font-weight: bold;
 }
 
-/* Chart styling */
-canvas {
-    max-width: 100%;
-    height: 300px !important; /* Adjust height for better visibility */
-    margin-bottom: 30px;
-}
-
 /* Responsive design */
 @media (max-width: 768px) {
     .dashboard-summary {
         flex-direction: column;
     }
 
-    table, canvas {
+    table {
         font-size: 14px;
     }
 

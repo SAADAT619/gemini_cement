@@ -11,29 +11,48 @@ include '../includes/sidebar.php';
 
 // Function to check if stock is sufficient
 function checkStockAvailability($conn, $product_id, $quantity) {
-    $sql = "SELECT quantity FROM products WHERE id = $product_id";
-    $result = $conn->query($sql);
+    $stmt = $conn->prepare("SELECT quantity FROM products WHERE id = ?");
+    $stmt->bind_param("i", $product_id);
+    $stmt->execute();
+    $result = $stmt->get_result();
     if ($result && $result->num_rows > 0) {
         $product = $result->fetch_assoc();
+        $stmt->close();
         return $product['quantity'] >= $quantity;
     }
+    $stmt->close();
     return false;
 }
 
-// Handle sale form submissions
-if ($_SERVER["REQUEST_METHOD"] == "POST") {
-    if (isset($_POST['add_sale'])) {
-        $customer_id = sanitizeInput($_POST['customer_id']);
-        $sale_date = sanitizeInput($_POST['sale_date']);
-        $payment_method = sanitizeInput($_POST['payment_method']);
-        $invoice_number = generateInvoiceNumber();
-        $paid = sanitizeInput($_POST['paid']);
+// Function to get the total previous due for a customer
+function getCustomerPreviousDue($conn, $customer_id) {
+    $stmt = $conn->prepare("SELECT SUM(due) as total_due FROM sales WHERE customer_id = ?");
+    $stmt->bind_param("i", $customer_id);
+    $stmt->execute();
+    $result = $stmt->get_result();
+    $row = $result->fetch_assoc();
+    $stmt->close();
+    return $row['total_due'] ?? 0;
+}
 
+// Handle sale form submissions
+if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['add_sale'])) {
+    $customer_id = sanitizeInput($_POST['customer_id']);
+    $sale_date = sanitizeInput($_POST['sale_date']);
+    $payment_method = sanitizeInput($_POST['payment_method']);
+    $invoice_number = generateInvoiceNumber();
+    $paid = floatval(sanitizeInput($_POST['paid']));
+    $include_previous_due = isset($_POST['include_previous_due']) ? 1 : 0;
+
+    // Validate inputs
+    if (empty($customer_id) || empty($sale_date) || empty($payment_method) || !isset($_POST['product_id']) || !isset($_POST['quantity']) || !isset($_POST['price'])) {
+        $error = "Please fill in all required fields.";
+    } else {
         // Validate stock availability before proceeding
         $stock_error = false;
         for ($i = 0; $i < count($_POST['product_id']); $i++) {
             $product_id = sanitizeInput($_POST['product_id'][$i]);
-            $quantity = floatval(sanitizeInput($_POST['quantity'][$i])); // Handle decimal quantities
+            $quantity = floatval(sanitizeInput($_POST['quantity'][$i]));
             if (!checkStockAvailability($conn, $product_id, $quantity)) {
                 $stock_error = true;
                 $error = "Insufficient stock for product ID $product_id. Requested: $quantity, Available: " . getProductStockById($conn, $product_id)['quantity'];
@@ -42,190 +61,85 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         }
 
         if (!$stock_error) {
-            // 1. Insert into 'sales' table
-            $sql_sales = "INSERT INTO sales (customer_id, sale_date, invoice_number, payment_method, paid, total, due)
-                          VALUES ($customer_id, '$sale_date', '$invoice_number', '$payment_method', $paid, 0, 0)";
+            // Start a transaction for atomicity
+            $conn->begin_transaction();
 
-            if ($conn->query($sql_sales) === TRUE) {
+            // Get previous due for the customer
+            $previous_due = getCustomerPreviousDue($conn, $customer_id);
+            $previous_due_to_add = $include_previous_due ? $previous_due : 0;
+
+            // 1. Insert into 'sales' table using prepared statement
+            $stmt = $conn->prepare("INSERT INTO sales (customer_id, sale_date, invoice_number, payment_method, paid, total, due) VALUES (?, ?, ?, ?, ?, 0, 0)");
+            $stmt->bind_param("isssd", $customer_id, $sale_date, $invoice_number, $payment_method, $paid);
+            if ($stmt->execute()) {
                 $sale_id = $conn->insert_id; // Get the ID of the new sale
                 $total = 0;
 
                 // 2. Insert into 'sale_items' table
                 for ($i = 0; $i < count($_POST['product_id']); $i++) {
                     $product_id = sanitizeInput($_POST['product_id'][$i]);
-                    $quantity = floatval(sanitizeInput($_POST['quantity'][$i])); // Handle decimal quantities
+                    $quantity = floatval(sanitizeInput($_POST['quantity'][$i]));
                     $price = floatval(sanitizeInput($_POST['price'][$i]));
                     $subtotal = $quantity * $price;
 
-                    $sql_sale_items = "INSERT INTO sale_items (sale_id, product_id, quantity, price, subtotal)
-                                       VALUES ($sale_id, $product_id, $quantity, $price, $subtotal)";
-
-                    if ($conn->query($sql_sale_items) !== TRUE) {
-                        $error = "Error adding sale item: " . $conn->error;
-                        break; // Stop the loop on error
+                    $stmt_items = $conn->prepare("INSERT INTO sale_items (sale_id, product_id, quantity, price, subtotal) VALUES (?, ?, ?, ?, ?)");
+                    $stmt_items->bind_param("iidd", $sale_id, $product_id, $quantity, $price, $subtotal);
+                    if (!$stmt_items->execute()) {
+                        $error = "Error adding sale item: " . $stmt_items->error;
+                        $conn->rollback();
+                        $stmt_items->close();
+                        break;
                     }
+                    $stmt_items->close();
 
                     // 3. Update product quantity
-                    $update_product_sql = "UPDATE products SET quantity = GREATEST(quantity - $quantity, 0) WHERE id = $product_id";
-                    if ($conn->query($update_product_sql) !== TRUE) {
-                        $error = "Error updating product quantity: " . $conn->error;
-                        break; // Stop the loop on error
+                    $stmt_update = $conn->prepare("UPDATE products SET quantity = GREATEST(quantity - ?, 0) WHERE id = ?");
+                    $stmt_update->bind_param("di", $quantity, $product_id);
+                    if (!$stmt_update->execute()) {
+                        $error = "Error updating product quantity: " . $stmt_update->error;
+                        $conn->rollback();
+                        $stmt_update->close();
+                        break;
                     }
+                    $stmt_update->close();
 
-                    $total += $subtotal; // Accumulate the subtotal
+                    $total += $subtotal;
                 }
 
                 // 4. Update the 'sales' table with the total and due
-                $due = $total - $paid;
-                $update_sales_total_sql = "UPDATE sales SET total = $total, due = $due WHERE id = $sale_id";
-                if ($conn->query($update_sales_total_sql) !== TRUE) {
-                    $error = "Error updating sale total: " . $conn->error;
-                }
+                $total_with_previous_due = $total + $previous_due_to_add;
+                $due = $total_with_previous_due - $paid;
 
-                if (!isset($error)) { // Only redirect if there were no errors
-                    $message = "Sale added successfully. Invoice Number: $invoice_number";
-                    header("Location: sell.php?message=" . urlencode($message));
-                    exit();
-                }
-            } else {
-                $error = "Error adding sale: " . $conn->error;
-            }
-        }
-    } elseif (isset($_POST['delete_sale'])) {
-        $id = sanitizeInput($_POST['id']);
-
-        // 1. Get product IDs and quantities from 'sale_items'
-        $get_sale_items_sql = "SELECT product_id, quantity FROM sale_items WHERE sale_id = $id";
-        $sale_items_result = $conn->query($get_sale_items_sql);
-
-        if ($sale_items_result && $sale_items_result->num_rows > 0) {
-            while ($sale_item_row = $sale_items_result->fetch_assoc()) {
-                $product_id_to_update = $sale_item_row['product_id'];
-                $quantity_to_update = floatval($sale_item_row['quantity']); // Handle decimal quantities
-
-                // 2. Update product quantity in 'products' table
-                $update_product_sql = "UPDATE products SET quantity = quantity + $quantity_to_update WHERE id = $product_id_to_update";
-                if ($conn->query($update_product_sql) !== TRUE) {
-                    $error = "Error updating product quantity: " . $conn->error;
-                    break; // Stop on error
-                }
-            }
-
-            if (!isset($error)) {
-                // 3. Delete the sale and associated sale items. Use a transaction for atomicity
-                $conn->begin_transaction();
-                $delete_sale_items_sql = "DELETE FROM sale_items WHERE sale_id = $id";
-                $delete_sale_sql = "DELETE FROM sales WHERE id = $id";
-
-                if ($conn->query($delete_sale_items_sql) === TRUE && $conn->query($delete_sale_sql) === TRUE) {
-                    $conn->commit();
-                    $message = "Sale deleted successfully";
+                $stmt_update_sales = $conn->prepare("UPDATE sales SET total = ?, due = ? WHERE id = ?");
+                $stmt_update_sales->bind_param("ddi", $total_with_previous_due, $due, $sale_id);
+                if (!$stmt_update_sales->execute()) {
+                    $error = "Error updating sale total: " . $stmt_update_sales->error;
+                    $conn->rollback();
                 } else {
-                    $conn->rollback();
-                    $error = "Error deleting sale: " . $conn->error;
+                    // If previous due was included, reset the due of previous sales to 0
+                    if ($include_previous_due && $previous_due > 0) {
+                        $stmt_reset_due = $conn->prepare("UPDATE sales SET due = 0 WHERE customer_id = ? AND id != ?");
+                        $stmt_reset_due->bind_param("ii", $customer_id, $sale_id);
+                        if (!$stmt_reset_due->execute()) {
+                            $error = "Error resetting previous due: " . $stmt_reset_due->error;
+                            $conn->rollback();
+                        }
+                        $stmt_reset_due->close();
+                    }
+
+                    if (!isset($error)) {
+                        $conn->commit();
+                        $message = "Sale added successfully. Invoice Number: $invoice_number";
+                        header("Location: sell.php?message=" . urlencode($message));
+                        exit();
+                    }
                 }
-            }
-        } else {
-            $error = "Error deleting sale: Sale not found";
-        }
-    } elseif (isset($_POST['update_sale'])) {
-        $id = sanitizeInput($_POST['id']);
-        $customer_id = sanitizeInput($_POST['customer_id']);
-        $sale_date = sanitizeInput($_POST['sale_date']);
-        $payment_method = sanitizeInput($_POST['payment_method']);
-        $paid = sanitizeInput($_POST['paid']);
-
-        $conn->begin_transaction();
-
-        // 1. Get the current sale items to restore product quantities
-        $get_sale_items_sql = "SELECT product_id, quantity FROM sale_items WHERE sale_id = $id";
-        $sale_items_result = $conn->query($get_sale_items_sql);
-
-        if ($sale_items_result && $sale_items_result->num_rows > 0) {
-            while ($sale_item_row = $sale_items_result->fetch_assoc()) {
-                $product_id_to_update = $sale_item_row['product_id'];
-                $quantity_to_update = floatval($sale_item_row['quantity']); // Handle decimal quantities
-
-                // Restore the product quantity
-                $update_product_sql = "UPDATE products SET quantity = quantity + $quantity_to_update WHERE id = $product_id_to_update";
-                if ($conn->query($update_product_sql) !== TRUE) {
-                    $error = "Error restoring product quantity: " . $conn->error;
-                    $conn->rollback();
-                    break;
-                }
-            }
-        } else {
-            $error = "Error fetching sale items for stock restoration: " . $conn->error;
-            $conn->rollback();
-        }
-
-        // 2. Validate stock availability for new quantities
-        $stock_error = false;
-        if (!isset($error)) {
-            for ($i = 0; $i < count($_POST['product_id']); $i++) {
-                $product_id = sanitizeInput($_POST['product_id'][$i]);
-                $quantity = floatval(sanitizeInput($_POST['quantity'][$i])); // Handle decimal quantities
-                if (!checkStockAvailability($conn, $product_id, $quantity)) {
-                    $stock_error = true;
-                    $error = "Insufficient stock for product ID $product_id. Requested: $quantity, Available: " . getProductStockById($conn, $product_id)['quantity'];
-                    $conn->rollback();
-                    break;
-                }
-            }
-        }
-
-        // 3. Delete old sale items
-        if (!isset($error) && !$stock_error) {
-            $delete_sale_items_sql = "DELETE FROM sale_items WHERE sale_id = $id";
-            if ($conn->query($delete_sale_items_sql) !== TRUE) {
-                $error = "Error deleting previous sale items: " . $conn->error;
-                $conn->rollback();
-            }
-        }
-
-        $total = 0;
-        // 4. Insert new sale items and update product quantities
-        if (!isset($error) && !$stock_error) {
-            for ($i = 0; $i < count($_POST['product_id']); $i++) {
-                $product_id = sanitizeInput($_POST['product_id'][$i]);
-                $quantity = floatval(sanitizeInput($_POST['quantity'][$i])); // Handle decimal quantities
-                $price = floatval(sanitizeInput($_POST['price'][$i]));
-                $subtotal = $quantity * $price;
-
-                $sql_sale_items = "INSERT INTO sale_items (sale_id, product_id, quantity, price, subtotal)
-                                   VALUES ($sale_id, $product_id, $quantity, $price, $subtotal)";
-                if ($conn->query($sql_sale_items) !== TRUE) {
-                    $error = "Error adding sale items: " . $conn->error;
-                    $conn->rollback();
-                    break;
-                }
-
-                // Update product quantity, ensuring it doesn't go below 0
-                $update_product_sql = "UPDATE products SET quantity = GREATEST(quantity - $quantity, 0) WHERE id = $product_id";
-                if ($conn->query($update_product_sql) !== TRUE) {
-                    $error = "Error updating product quantity: " . $conn->error;
-                    $conn->rollback();
-                    break;
-                }
-                $total += $subtotal;
-            }
-        }
-
-        $due = $total - $paid;
-        // 5. Update sale
-        if (!isset($error) && !$stock_error) {
-            $sql_update_sale = "UPDATE sales 
-                                SET customer_id = $customer_id, sale_date = '$sale_date', 
-                                payment_method = '$payment_method', paid = $paid, total = $total, due = $due
-                                WHERE id = $id";
-
-            if ($conn->query($sql_update_sale) === TRUE) {
-                $conn->commit();
-                $message = "Sale updated successfully";
+                $stmt_update_sales->close();
             } else {
+                $error = "Error adding sale: " . $stmt->error;
                 $conn->rollback();
-                $error = "Error updating sale: " . $conn->error;
             }
+            $stmt->close();
         }
     }
 }
@@ -237,18 +151,18 @@ $customerResult = $conn->query($customerSql);
 // Fetch products for dropdown (using getProductStock to include stock data)
 $products = getProductStock($conn);
 
-// Fetch sales for listing
-$salesSql = "SELECT sales.*, customers.name as customer_name
-            FROM sales
-            LEFT JOIN customers ON sales.customer_id = customers.id
-            ORDER BY sales.sale_date DESC";
-$salesResult = $conn->query($salesSql);
+// Fetch sales for initial listing (this will be replaced by AJAX)
+$stmt_sales = $conn->prepare("SELECT sales.*, customers.name as customer_name, customers.phone as customer_phone, customers.address as customer_address 
+        FROM sales 
+        LEFT JOIN customers ON sales.customer_id = customers.id 
+        ORDER BY sales.sale_date DESC");
+$stmt_sales->execute();
+$salesResult = $stmt_sales->get_result();
 
 // Fetch sale items for listing
-$saleItemsSql = "SELECT sale_items.*, products.name as product_name
-                FROM sale_items
-                LEFT JOIN products ON sale_items.product_id = products.id";
-$saleItemsResult = $conn->query($saleItemsSql);
+$stmt_sale_items = $conn->prepare("SELECT sale_items.*, products.name as product_name FROM sale_items LEFT JOIN products ON sale_items.product_id = products.id");
+$stmt_sale_items->execute();
+$saleItemsResult = $stmt_sale_items->get_result();
 ?>
 
 <h2>Sell Products</h2>
@@ -262,7 +176,7 @@ $saleItemsResult = $conn->query($saleItemsSql);
 } ?>
 
 <form method="post">
-    <select name="customer_id" id="customer_id" required>
+    <select name="customer_id" id="customer_id" required onchange="fetchPreviousDue(this.value)">
         <option value="">Select Customer</option>
         <?php
         if ($customerResult->num_rows > 0) {
@@ -272,6 +186,11 @@ $saleItemsResult = $conn->query($saleItemsSql);
         }
         ?>
     </select><br>
+
+    <div id="previous_due_container" style="display:none;">
+        <strong>Previous Due:</strong> <span id="previous_due">0.00</span><br>
+        <label><input type="checkbox" name="include_previous_due" id="include_previous_due" onchange="calculateTotal()"> Include Previous Due in This Sale</label><br>
+    </div>
 
     <div id="product_list">
         <div class="product_item">
@@ -310,7 +229,14 @@ $saleItemsResult = $conn->query($saleItemsSql);
 <hr>
 
 <h3>Sale List</h3>
-<table>
+
+<!-- Single Search Form -->
+<div class="search-container">
+    <input type="text" id="search_input" placeholder="Search by Name, Phone, Address, or Invoice Number" oninput="searchSales()">
+</div>
+
+<!-- Sales Table (to be updated dynamically) -->
+<table id="sales_table">
     <thead>
         <tr>
             <th>Invoice #</th>
@@ -324,32 +250,30 @@ $saleItemsResult = $conn->query($saleItemsSql);
             <th>Action</th>
         </tr>
     </thead>
-    <tbody>
+    <tbody id="sales_table_body">
         <?php
         if ($salesResult->num_rows > 0) {
             while ($saleRow = $salesResult->fetch_assoc()) {
                 echo "<tr>";
-                echo "<td>" . $saleRow['invoice_number'] . "</td>";
-                echo "<td>" . $saleRow['customer_name'] . "</td>";
+                echo "<td>" . htmlspecialchars($saleRow['invoice_number']) . "</td>";
+                echo "<td>" . htmlspecialchars($saleRow['customer_name']) . "</td>";
                 echo "<td>";
                 // Display the products for each sale
                 $sale_id = $saleRow['id'];
                 $saleItemsResult->data_seek(0);
                 while ($saleItemRow = $saleItemsResult->fetch_assoc()) {
                     if ($saleItemRow['sale_id'] == $sale_id) {
-                        echo $saleItemRow['product_name'] . " (" . $saleItemRow['quantity'] . ")<br>";
+                        echo htmlspecialchars($saleItemRow['product_name']) . " (" . $saleItemRow['quantity'] . ")<br>";
                     }
                 }
                 echo "</td>";
-                echo "<td>" . $saleRow['total'] . "</td>";
-                echo "<td>" . $saleRow['paid'] . "</td>";
-                echo "<td>" . $saleRow['due'] . "</td>";
-                echo "<td>" . $saleRow['sale_date'] . "</td>";
-                echo "<td>" . $saleRow['payment_method'] . "</td>";
+                echo "<td>" . number_format($saleRow['total'], 2) . "</td>";
+                echo "<td>" . number_format($saleRow['paid'], 2) . "</td>";
+                echo "<td>" . number_format($saleRow['due'], 2) . "</td>";
+                echo "<td>" . htmlspecialchars($saleRow['sale_date']) . "</td>";
+                echo "<td>" . htmlspecialchars($saleRow['payment_method']) . "</td>";
                 echo "<td>";
-                echo "<button onclick=\"generateInvoice('" . $saleRow['invoice_number'] . "')\">Invoice</button> | ";
-                echo "<button onclick=\"editSale(" . $saleRow['id'] . ")\">Edit</button> | ";
-                echo "<form method='post' style='display:inline;'><input type='hidden' name='id' value='" . $saleRow['id'] . "'><button type='submit' name='delete_sale'>Delete</button></form>";
+                echo "<button onclick=\"generateInvoice('" . htmlspecialchars($saleRow['invoice_number']) . "')\">Invoice</button>";
                 echo "</td>";
                 echo "</tr>";
             }
@@ -360,348 +284,244 @@ $saleItemsResult = $conn->query($saleItemsSql);
     </tbody>
 </table>
 
-<div id="edit_sale_form" style="display:none;">
-    <h3>Edit Sale</h3>
-    <form method="post">
-        <input type="hidden" name="id" id="edit_sale_id">
-        <select name="customer_id" id="edit_customer_id" required>
-            <option value="">Select Customer</option>
-            <?php
-            $customerSql = "SELECT * FROM customers";
-            $customerResult = $conn->query($customerSql);
-            if ($customerResult->num_rows > 0) {
-                while ($customerRow = $customerResult->fetch_assoc()) {
-                    echo "<option value='" . $customerRow['id'] . "'>" . $customerRow['name'] . "</option>";
-                }
-            }
-            ?>
-        </select><br>
-
-        <div id="edit_product_list">
-            <div class="product_item">
-                <select name="product_id[]" required>
-                    <option value="">Select Product</option>
-                    <?php
-                    if (count($products) > 0) {
-                        foreach ($products as $product) {
-                            echo "<option value='" . $product['id'] . "'>" . $product['name'] . " (Stock: " . $product['quantity'] . " " . ($product['unit'] ?? '') . ")</option>";
-                        }
-                    }
-                    ?>
-                </select>
-                <input type="number" name="quantity[]" placeholder="Quantity" min="0" step="0.01" required oninput="validateInput(this); calculateTotal(true)">
-                <input type="number" name="price[]" placeholder="Price" min="0" step="0.01" required oninput="validateInput(this); calculateTotal(true)">
-                <span>Subtotal: <span class="subtotal">0.00</span></span>
-                <button type="button" class="remove_product" onclick="removeProduct(this, true)">✖</button><br>
-            </div>
-        </div>
-        <button type="button" id="edit_add_product">Add Product</button><br>
-
-        <input type="number" name="paid" id="edit_paid" placeholder="Paid Amount" min="0" step="0.01" required oninput="validateInput(this); calculateDue(true)"><br>
-        <strong>Total:</strong> <span id="edit_total">0.00</span><br>
-        <strong>Due:</strong> <span id="edit_due">0.00</span><br>
-        <input type="date" name="sale_date" id="edit_sale_date" required><br>
-        <select name="payment_method" id="edit_payment_method" required>
-            <option value="">Select Payment Method</option>
-            <option value="cash">Cash</option>
-            <option value="credit_card">Credit Card</option>
-            <option value="bank_transfer">Bank Transfer</option>
-            <option value="other">Other</option>
-        </select><br>
-        <button type="submit" name="update_sale">Update Sale</button>
-        <button type="button" onclick="document.getElementById('edit_sale_form').style.display='none';">Cancel</button>
-    </form>
-</div>
-
 <script>
-    // Function to validate input and ensure non-negative values
-    function validateInput(input) {
-        if (input.value < 0) {
-            input.value = 0; // Set to 0 if the user tries to input a negative value
-        }
+// Function to validate input and ensure non-negative values
+function validateInput(input) {
+    if (input.value < 0) {
+        input.value = 0; // Set to 0 if the user tries to input a negative value
+    }
+}
+
+// Function to fetch previous due for the selected customer
+function fetchPreviousDue(customerId) {
+    if (customerId === "") {
+        document.getElementById('previous_due_container').style.display = 'none';
+        document.getElementById('previous_due').textContent = "0.00";
+        document.getElementById('include_previous_due').checked = false;
+        calculateTotal();
+        return;
     }
 
-    function calculateTotal(isEdit = false) {
-        var productListId = isEdit ? 'edit_product_list' : 'product_list';
-        var totalId = isEdit ? 'edit_total' : 'total';
-        var dueId = isEdit ? 'edit_due' : 'due';
-        var paidId = isEdit ? 'edit_paid' : 'paid';
-
-        var productItems = document.getElementById(productListId).getElementsByClassName('product_item');
-        var total = 0;
-
-        for (var i = 0; i < productItems.length; i++) {
-            var quantityInput = productItems[i].querySelector('input[name="quantity[]"]');
-            var priceInput = productItems[i].querySelector('input[name="price[]"]');
-            var subtotalDisplay = productItems[i].querySelector('.subtotal');
-
-            // Ensure quantity and price are non-negative
-            var quantity = quantityInput.value && quantityInput.value >= 0 ? parseFloat(quantityInput.value) : 0;
-            var price = priceInput.value && priceInput.value >= 0 ? parseFloat(priceInput.value) : 0;
-
-            var subtotal = quantity * price;
-            subtotalDisplay.textContent = subtotal.toFixed(2);
-            total += subtotal;
-        }
-
-        document.getElementById(totalId).textContent = total.toFixed(2);
-        calculateDue(isEdit);
-    }
-
-    function calculateDue(isEdit = false) {
-        var totalId = isEdit ? 'edit_total' : 'total';
-        var dueId = isEdit ? 'edit_due' : 'due';
-        var paidId = isEdit ? 'edit_paid' : 'paid';
-
-        var total = parseFloat(document.getElementById(totalId).textContent) || 0;
-        var paid = document.getElementById(paidId).value && document.getElementById(paidId).value >= 0 ? parseFloat(document.getElementById(paidId).value) : 0;
-        var due = total - paid;
-
-        document.getElementById(dueId).textContent = due.toFixed(2);
-    }
-
-    function removeProduct(button, isEdit = false) {
-        var productItem = button.parentElement;
-        productItem.remove();
-        calculateTotal(isEdit); // Recalculate total after removal
-    }
-
-    function generateInvoice(invoiceNumber) {
-        window.location.href = "invoice_sell.php?invoice_number=" + encodeURIComponent(invoiceNumber);
-    }
-
-    function editSale(id) {
-        document.getElementById('edit_sale_form').style.display = 'block';
-        document.getElementById('edit_sale_id').value = id;
-
-        // Fetch sale details using AJAX
-        var xhr = new XMLHttpRequest();
-        xhr.onreadystatechange = function() {
-            if (xhr.readyState == 4) {
-                if (xhr.status == 200) {
-                    try {
-                        var response = JSON.parse(xhr.responseText);
-                        if (response.error) {
-                            alert("Error: " + response.error);
-                            return;
-                        }
-
-                        // Populate the form fields
-                        document.getElementById('edit_customer_id').value = response.customer_id || '';
-                        document.getElementById('edit_sale_date').value = response.sale_date || '';
-                        document.getElementById('edit_payment_method').value = response.payment_method || '';
-                        document.getElementById('edit_paid').value = response.paid || 0;
-                        document.getElementById('edit_total').textContent = parseFloat(response.total || 0).toFixed(2);
-                        document.getElementById('edit_due').textContent = parseFloat(response.due || 0).toFixed(2);
-
-                        // Populate the product list
-                        populateProductDropdown(id);
-                    } catch (e) {
-                        alert("Error parsing sale details: " + e.message);
+    var xhr = new XMLHttpRequest();
+    xhr.onreadystatechange = function() {
+        if (xhr.readyState == 4) {
+            if (xhr.status == 200) {
+                try {
+                    var response = JSON.parse(xhr.responseText);
+                    if (response.error) {
+                        alert("Error: " + response.error);
+                        return;
                     }
-                } else {
-                    alert("Error fetching sale details: " + xhr.status + " " + xhr.statusText);
+
+                    var previousDue = parseFloat(response.previous_due) || 0;
+                    document.getElementById('previous_due').textContent = previousDue.toFixed(2);
+                    document.getElementById('previous_due_container').style.display = previousDue > 0 ? 'block' : 'none';
+                    document.getElementById('include_previous_due').checked = false;
+                    calculateTotal();
+                } catch (e) {
+                    alert("Error parsing previous due: " + e.message);
                 }
-            }
-        };
-        xhr.open("GET", "get_sale_details.php?id=" + id, true);
-        xhr.send();
-    }
-
-    function populateProductDropdown(saleId) {
-        var productDropdown = document.getElementById("edit_product_list");
-        productDropdown.innerHTML = ''; // Clear previous product list
-
-        // Fetch products associated with the sale
-        var xhr = new XMLHttpRequest();
-        xhr.onreadystatechange = function() {
-            if (xhr.readyState == 4) {
-                if (xhr.status == 200) {
-                    try {
-                        var response = JSON.parse(xhr.responseText);
-                        if (response.error) {
-                            alert("Error: " + response.error);
-                            return;
-                        }
-
-                        var products = response.products || [];
-                        if (products.length === 0) {
-                            // If no products, add a default empty row
-                            addProductRow(true);
-                            return;
-                        }
-
-                        for (var i = 0; i < products.length; i++) {
-                            var product = products[i];
-                            var productDiv = document.createElement('div');
-                            productDiv.className = 'product_item';
-
-                            var select = document.createElement('select');
-                            select.name = 'product_id[]';
-                            select.required = true;
-                            <?php
-                            if (count($products) > 0) {
-                                foreach ($products as $product) {
-                                    echo "var option = document.createElement('option');";
-                                    echo "option.value = '" . $product['id'] . "';";
-                                    echo "option.text = '" . $product['name'] . " (Stock: " . $product['quantity'] . " " . ($product['unit'] ?? '') . ")';";
-                                    echo "if (" . $product['id'] . " == product.product_id) {";
-                                    echo "option.selected = true;";
-                                    echo "}";
-                                    echo "select.appendChild(option);";
-                                }
-                            }
-                            ?>
-
-                            var quantityInput = document.createElement('input');
-                            quantityInput.type = 'number';
-                            quantityInput.name = 'quantity[]';
-                            quantityInput.placeholder = 'Quantity';
-                            quantityInput.min = '0';
-                            quantityInput.step = '0.01';
-                            quantityInput.value = product.quantity || 0;
-                            quantityInput.required = true;
-                            quantityInput.addEventListener('input', function() { validateInput(this); calculateTotal(true); });
-
-                            var priceInput = document.createElement('input');
-                            priceInput.type = 'number';
-                            priceInput.name = 'price[]';
-                            priceInput.placeholder = 'Price';
-                            priceInput.min = '0';
-                            priceInput.step = '0.01';
-                            priceInput.value = product.price || 0;
-                            priceInput.required = true;
-                            quantityInput.addEventListener('input', function() { validateInput(this); calculateTotal(true); });
-
-                            var subtotalSpan = document.createElement('span');
-                            var subtotal = (product.quantity || 0) * (product.price || 0);
-                            subtotalSpan.innerHTML = "Subtotal: <span class='subtotal'>" + parseFloat(subtotal).toFixed(2) + "</span>";
-
-                            var removeButton = document.createElement('button');
-                            removeButton.type = 'button';
-                            removeButton.className = 'remove_product';
-                            removeButton.textContent = '✖';
-                            removeButton.onclick = function() { removeProduct(this, true); };
-
-                            productDiv.appendChild(select);
-                            productDiv.appendChild(quantityInput);
-                            productDiv.appendChild(priceInput);
-                            productDiv.appendChild(subtotalSpan);
-                            productDiv.appendChild(removeButton);
-                            productDiv.appendChild(document.createElement('br'));
-                            productDropdown.appendChild(productDiv);
-                        }
-                        calculateTotal(true);
-                    } catch (e) {
-                        alert("Error parsing sale items: " + e.message);
-                    }
-                } else {
-                    alert("Error fetching sale items: " + xhr.status + " " + xhr.statusText);
-                }
-            }
-        };
-        xhr.open("GET", "get_sale_items.php?sale_id=" + saleId, true);
-        xhr.send();
-    }
-
-    function addProductRow(isEdit = false) {
-        var productList = document.getElementById(isEdit ? 'edit_product_list' : 'product_list');
-        var newProductItem = document.createElement('div');
-        newProductItem.className = 'product_item';
-
-        var select = document.createElement('select');
-        select.name = 'product_id[]';
-        select.required = true;
-        <?php
-        if (count($products) > 0) {
-            foreach ($products as $product) {
-                echo "var option = document.createElement('option');";
-                echo "option.value = '" . $product['id'] . "';";
-                echo "option.text = '" . $product['name'] . " (Stock: " . $product['quantity'] . " " . ($product['unit'] ?? '') . ")';";
-                echo "select.appendChild(option);";
+            } else {
+                alert("Error fetching previous due: " + xhr.status + " " + xhr.statusText);
             }
         }
-        ?>
+    };
+    xhr.open("GET", "get_customer_due.php?customer_id=" + customerId, true);
+    xhr.send();
+}
 
-        var quantityInput = document.createElement('input');
-        quantityInput.type = 'number';
-        quantityInput.name = 'quantity[]';
-        quantityInput.placeholder = 'Quantity';
-        quantityInput.min = '0';
-        quantityInput.step = '0.01';
-        quantityInput.required = true;
-        quantityInput.addEventListener('input', function() { validateInput(this); calculateTotal(isEdit); });
+function calculateTotal() {
+    var productItems = document.getElementById('product_list').getElementsByClassName('product_item');
+    var total = 0;
 
-        var priceInput = document.createElement('input');
-        priceInput.type = 'number';
-        priceInput.name = 'price[]';
-        priceInput.placeholder = 'Price';
-        priceInput.min = '0';
-        priceInput.step = '0.01';
-        priceInput.required = true;
-        priceInput.addEventListener('input', function() { validateInput(this); calculateTotal(isEdit); });
+    for (var i = 0; i < productItems.length; i++) {
+        var quantityInput = productItems[i].querySelector('input[name="quantity[]"]');
+        var priceInput = productItems[i].querySelector('input[name="price[]"]');
+        var subtotalDisplay = productItems[i].querySelector('.subtotal');
 
-        var subtotalSpan = document.createElement('span');
-        subtotalSpan.innerHTML = "Subtotal: <span class='subtotal'>0.00</span>";
+        var quantity = quantityInput.value && quantityInput.value >= 0 ? parseFloat(quantityInput.value) : 0;
+        var price = priceInput.value && priceInput.value >= 0 ? parseFloat(priceInput.value) : 0;
 
-        var removeButton = document.createElement('button');
-        removeButton.type = 'button';
-        removeButton.className = 'remove_product';
-        removeButton.textContent = '✖';
-        removeButton.onclick = function() { removeProduct(this, isEdit); };
-
-        newProductItem.appendChild(select);
-        newProductItem.appendChild(quantityInput);
-        newProductItem.appendChild(priceInput);
-        newProductItem.appendChild(subtotalSpan);
-        newProductItem.appendChild(removeButton);
-        newProductItem.appendChild(document.createElement('br'));
-        productList.appendChild(newProductItem);
-
-        calculateTotal(isEdit);
+        var subtotal = quantity * price;
+        subtotalDisplay.textContent = subtotal.toFixed(2);
+        total += subtotal;
     }
 
-    document.getElementById('add_product').addEventListener('click', function() {
-        addProductRow(false);
-    });
+    // Add previous due if the checkbox is checked
+    var includePreviousDue = document.getElementById('include_previous_due').checked;
+    var previousDue = parseFloat(document.getElementById('previous_due').textContent) || 0;
+    if (includePreviousDue) {
+        total += previousDue;
+    }
 
-    document.getElementById('edit_add_product').addEventListener('click', function() {
-        addProductRow(true);
-    });
+    document.getElementById('total').textContent = total.toFixed(2);
+    calculateDue();
+}
+
+function calculateDue() {
+    var total = parseFloat(document.getElementById('total').textContent) || 0;
+    var paid = document.getElementById('paid').value && document.getElementById('paid').value >= 0 ? parseFloat(document.getElementById('paid').value) : 0;
+    var due = total - paid;
+
+    document.getElementById('due').textContent = due.toFixed(2);
+}
+
+function removeProduct(button) {
+    var productItem = button.parentElement;
+    productItem.remove();
+    calculateTotal();
+}
+
+function generateInvoice(invoiceNumber) {
+    window.location.href = "invoice_sell.php?invoice_number=" + encodeURIComponent(invoiceNumber);
+}
+
+function addProductRow() {
+    var productList = document.getElementById('product_list');
+    var newProductItem = document.createElement('div');
+    newProductItem.className = 'product_item';
+
+    var select = document.createElement('select');
+    select.name = 'product_id[]';
+    select.required = true;
+    <?php
+    if (count($products) > 0) {
+        foreach ($products as $product) {
+            echo "var option = document.createElement('option');";
+            echo "option.value = '" . $product['id'] . "';";
+            echo "option.text = '" . $product['name'] . " (Stock: " . $product['quantity'] . " " . ($product['unit'] ?? '') . ")';";
+            echo "select.appendChild(option);";
+        }
+    }
+    ?>
+
+    var quantityInput = document.createElement('input');
+    quantityInput.type = 'number';
+    quantityInput.name = 'quantity[]';
+    quantityInput.placeholder = 'Quantity';
+    quantityInput.min = '0';
+    quantityInput.step = '0.01';
+    quantityInput.required = true;
+    quantityInput.addEventListener('input', function() { validateInput(this); calculateTotal(); });
+
+    var priceInput = document.createElement('input');
+    priceInput.type = 'number';
+    priceInput.name = 'price[]';
+    priceInput.placeholder = 'Price';
+    priceInput.min = '0';
+    priceInput.step = '0.01';
+    priceInput.required = true;
+    priceInput.addEventListener('input', function() { validateInput(this); calculateTotal(); });
+
+    var subtotalSpan = document.createElement('span');
+    subtotalSpan.innerHTML = "Subtotal: <span class='subtotal'>0.00</span>";
+
+    var removeButton = document.createElement('button');
+    removeButton.type = 'button';
+    removeButton.className = 'remove_product';
+    removeButton.textContent = '✖';
+    removeButton.onclick = function() { removeProduct(this); };
+
+    newProductItem.appendChild(select);
+    newProductItem.appendChild(quantityInput);
+    newProductItem.appendChild(priceInput);
+    newProductItem.appendChild(subtotalSpan);
+    newProductItem.appendChild(removeButton);
+    newProductItem.appendChild(document.createElement('br'));
+    productList.appendChild(newProductItem);
+
+    calculateTotal();
+}
+
+document.getElementById('add_product').addEventListener('click', function() {
+    addProductRow();
+});
+
+// Real-time search function
+function searchSales() {
+    var searchTerm = document.getElementById('search_input').value;
+
+    var xhr = new XMLHttpRequest();
+    xhr.onreadystatechange = function() {
+        if (xhr.readyState == 4) {
+            if (xhr.status == 200) {
+                document.getElementById('sales_table_body').innerHTML = xhr.responseText;
+            } else {
+                console.error("Error fetching sales: " + xhr.status + " " + xhr.statusText);
+            }
+        }
+    };
+    xhr.open("GET", "search_sales.php?search=" + encodeURIComponent(searchTerm), true);
+    xhr.send();
+}
 </script>
 
 <style>
-    .remove_product {
-        margin-left: 10px;
-        color: red;
-        border: none;
-        background: none;
-        cursor: pointer;
-        font-size: 16px;
-    }
-    .remove_product:hover {
-        color: darkred;
-    }
-    input[type="number"] {
-        width: 100px;
-        padding: 5px;
-    }
-    .success {
-        color: green;
-        background-color: #e0f7fa;
-        padding: 10px;
-        border-radius: 4px;
-        margin-bottom: 20px;
-    }
-    .error {
-        color: #d32f2f;
-        background-color: #ffebee;
-        padding: 10px;
-        border-radius: 4px;
-        margin-bottom: 20px;
-    }
+.remove_product {
+    margin-left: 10px;
+    color: red;
+    border: none;
+    background: none;
+    cursor: pointer;
+    font-size: 16px;
+}
+.remove_product:hover {
+    color: darkred;
+}
+input[type="number"] {
+    width: 100px;
+    padding: 5px;
+}
+.success {
+    color: green;
+    background-color: #e0f7fa;
+    padding: 10px;
+    border-radius: 4px;
+    margin-bottom: 20px;
+}
+.error {
+    color: #d32f2f;
+    background-color: #ffebee;
+    padding: 10px;
+    border-radius: 4px;
+    margin-bottom: 20px;
+}
+.search-container {
+    margin-bottom: 20px;
+}
+.search-container input {
+    padding: 8px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    width: 300px;
+}
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 30px;
+}
+th, td {
+    padding: 12px;
+    text-align: left;
+    border-bottom: 1px solid #ddd;
+}
+th {
+    background-color: #4CAF50;
+    color: white;
+}
+tr:nth-child(even) {
+    background-color: #f9f9f9;
+}
+tr:hover {
+    background-color: #f1f1f1;
+}
 </style>
 
 <?php
 include '../includes/footer.php';
+
+// Close prepared statements
+$stmt_sales->close();
+$stmt_sale_items->close();
+$conn->close();
 ?>

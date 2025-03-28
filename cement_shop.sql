@@ -67,9 +67,12 @@ CREATE TABLE purchases (
 CREATE TABLE customers (
     id INT AUTO_INCREMENT PRIMARY KEY,
     name VARCHAR(255) NOT NULL,
-    phone VARCHAR(20),
+    phone VARCHAR(20), -- Removed NOT NULL constraint to allow optional phone numbers
     address TEXT,
-    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    INDEX idx_name (name), -- Index for faster searches by name
+    INDEX idx_phone (phone), -- Index for faster searches by phone
+    FULLTEXT idx_address (address) -- FULLTEXT index for faster searches by address
 );
 
 -- Table: sales
@@ -112,10 +115,10 @@ CREATE TABLE settings (
 
 -- Insert default settings
 INSERT INTO settings (setting_key, value) VALUES
-('shop_name', 'Your Shop Name'),
-('shop_address', 'Your Shop Address'),
-('shop_phone', 'Your Shop Phone'),
-('low_stock_threshold', '5'); -- Added setting for low stock threshold
+('shop_name', 'Cement Shop'),
+('shop_address', '123 Cement Road, City'),
+('shop_phone', '123-456-7890'),
+('low_stock_threshold', '5'); -- Low stock threshold
 
 -- Insert a test user
 INSERT INTO users (email, password, mobile_number, name, role) VALUES 
@@ -128,21 +131,39 @@ INSERT INTO categories (name) VALUES
 
 -- Insert sample products
 INSERT INTO products (category_id, name, price, quantity, unit) VALUES 
-(1, '7 rings', 550.00, 15, 'bag'),
-(2, 'BSRM', 250.00, 0, 'piece');
+(1, '7 Rings', 550.00, 15, 'bag'),
+(2, 'BSRM', 250.00, 20, 'piece');
 
 -- Insert sample customers
 INSERT INTO customers (name, phone, address) VALUES 
-('MD SAMIN YASAR SADAAT', '1234567890', '123 Customer Street');
+('MD Samin Yasar Sadaat', '1234567890', '123 Customer Street'),
+('John Doe', '0987654321', '456 Customer Avenue'),
+('Jane Smith', '1122334455', '789 Customer Lane'),
+('Alice Johnson', '2233445566', '101 Customer Road'),
+('Bob Brown', '3344556677', '202 Customer Blvd');
 
 -- Insert sample sellers
 INSERT INTO sellers (name, phone, address) VALUES 
-('Seller One', '0987654321', '456 Seller Avenue');
+('Seller One', '0987654321', '456 Seller Avenue'),
+('Seller Two', '1122334455', '789 Seller Lane');
+
+-- Insert sample purchases (for testing)
+INSERT INTO purchases (seller_id, product_id, quantity, price, total, paid, due, purchase_date, payment_method, invoice_number) VALUES 
+(1, 1, 10, 500.00, 5000.00, 4000.00, 1000.00, '2025-03-28', 'cash', 'PUR-20250328001'),
+(2, 2, 15, 200.00, 3000.00, 3000.00, 0.00, '2025-03-28', 'bank_transfer', 'PUR-20250328002');
 
 -- Insert sample sales (for testing)
 INSERT INTO sales (customer_id, sale_date, invoice_number, payment_method, total, paid, due) VALUES 
-(1, '2025-03-27', 'INV-20250327131610', 'cash', 10000.00, 8000.00, 2000.00);
+(1, '2025-03-28', 'INV-20250328001', 'cash', 3850.00, 3000.00, 850.00),
+(2, '2025-03-28', 'INV-20250328002', 'credit_card', 2500.00, 2000.00, 500.00),
+(3, '2025-03-27', 'INV-20250327001', 'bank_transfer', 1100.00, 1000.00, 100.00),
+(4, '2025-03-27', 'INV-20250327002', 'cash', 550.00, 500.00, 50.00),
+(5, '2025-03-26', 'INV-20250326001', 'credit_card', 250.00, 250.00, 0.00);
 
--- Insert sample sale items
+-- Insert sample sale items (aligned with sales totals)
 INSERT INTO sale_items (sale_id, product_id, quantity, price, subtotal) VALUES 
-(1, 1, 7, 10.00, 70.00);
+(1, 1, 7, 550.00, 3850.00), -- Matches total of INV-20250328001
+(2, 2, 10, 250.00, 2500.00), -- Matches total of INV-20250328002
+(3, 1, 2, 550.00, 1100.00), -- Matches total of INV-20250327001
+(4, 1, 1, 550.00, 550.00), -- Matches total of INV-20250327002
+(5, 2, 1, 250.00, 250.00); -- Matches total of INV-20250326001

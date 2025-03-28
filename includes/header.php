@@ -1,9 +1,22 @@
+<?php
+// Ensure $conn is available by including the database configuration
+if (!isset($conn)) {
+    include '../config/database.php';
+}
+if (!function_exists('getShopSetting')) {
+    include '../core/functions.php';
+}
+$shopName = getShopSetting('shop_name', $conn) ?: 'Cement Shop Inventory';
+?>
+
 <!DOCTYPE html>
-<html>
+<html lang="en">
 <head>
-    <title>Cement Shop Inventory</title>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title><?php echo htmlspecialchars($shopName); ?></title>
     <link rel="stylesheet" href="../assets/css/style.css">
-    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
 </head>
 <body>
     <div class="container">

@@ -1,8 +1,7 @@
 <?php
 // core/functions.php
 
-// This file should contain ALL your general helper functions.
-// Make sure these functions are NOT defined in any other file.
+// This file contains all general helper functions for the application.
 
 function sanitizeInput($data) {
     global $conn;
@@ -14,17 +13,21 @@ function generateInvoiceNumber() {
 }
 
 function getCategoryName($category_id, $conn) {
+    if (!$category_id) {
+        return 'Unknown';
+    }
+    $category_id = (int)$category_id; // Ensure category_id is an integer
     $sql = "SELECT name FROM categories WHERE id = $category_id";
     $result = $conn->query($sql);
     if (!$result) {
         error_log("getCategoryName Query Error: " . $conn->error);
-        return null;
+        return 'Unknown';
     }
     $row = $result->fetch_assoc();
     return $row['name'] ?? 'Unknown';
 }
 
-// Function to get total sales for the dashboard
+// Function to get total sales (not currently used in dashboard.php but kept for future use)
 function getTotalSales($conn) {
     $sql = "SELECT SUM(total) as total_sales FROM sales";
     $result = $conn->query($sql);
@@ -36,7 +39,7 @@ function getTotalSales($conn) {
     return $row['total_sales'] ? floatval($row['total_sales']) : 0;
 }
 
-// Function to get monthly sales
+// Function to get monthly sales (not currently used in dashboard.php but kept for future use)
 function getMonthlySales($conn) {
     $monthlySales = array();
     for ($month = 1; $month <= 12; $month++) {
@@ -55,9 +58,8 @@ function getMonthlySales($conn) {
 
 // Function to get product stock
 function getProductStock($conn) {
-    $sql = "SELECT p.id, p.name, p.category_id, p.quantity, p.price, p.unit, c.name as category_name
-            FROM products p
-            LEFT JOIN categories c ON p.category_id = c.id";
+    $sql = "SELECT p.id, p.name, p.category_id, p.quantity, p.price, p.unit
+            FROM products p";
     $result = $conn->query($sql);
     if (!$result) {
         error_log("getProductStock Query Error: " . $conn->error);
@@ -67,6 +69,7 @@ function getProductStock($conn) {
     if ($result->num_rows > 0) {
         while ($row = $result->fetch_assoc()) {
             $row['quantity'] = floatval($row['quantity']); // Ensure quantity is a float
+            $row['price'] = floatval($row['price']); // Ensure price is a float
             $products[] = $row;
         }
     }
@@ -75,7 +78,7 @@ function getProductStock($conn) {
 
 // Function to get product stock by ID (used for stock validation in sell.php)
 function getProductStockById($conn, $product_id) {
-    $product_id = intval($product_id);
+    $product_id = (int)$product_id; // Ensure product_id is an integer
     $sql = "SELECT * FROM products WHERE id = $product_id";
     $result = $conn->query($sql);
     if (!$result) {
@@ -85,6 +88,7 @@ function getProductStockById($conn, $product_id) {
     if ($result->num_rows > 0) {
         $row = $result->fetch_assoc();
         $row['quantity'] = floatval($row['quantity']); // Ensure quantity is a float
+        $row['price'] = floatval($row['price']); // Ensure price is a float
         return $row;
     }
     return ['quantity' => 0, 'unit' => ''];
