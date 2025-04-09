@@ -1,6 +1,4 @@
 <?php
-// pages/invoice.php
-
 session_start();
 if (!isset($_SESSION['user_email'])) {
     header("Location: login.php");
@@ -9,184 +7,191 @@ if (!isset($_SESSION['user_email'])) {
 include '../config/database.php';
 include '../core/functions.php';
 include '../includes/header.php';
-include '../includes/sidebar.php';
 
-if (isset($_GET['invoice_number'])) {
-    $invoice_number = sanitizeInput($_GET['invoice_number']);
-
-    // Fetch purchase details based on invoice number
-    $sql = "SELECT purchases.*, 
-                   sellers.name as seller_name, 
-                   sellers.address as seller_address, 
-                   sellers.phone as seller_phone, 
-                   products.name as product_name
-            FROM purchases
-            LEFT JOIN sellers ON purchases.seller_id = sellers.id
-            LEFT JOIN products ON purchases.product_id = products.id
-            WHERE purchases.invoice_number = '$invoice_number'";
-
-    $result = $conn->query($sql);
-
-    if ($result->num_rows > 0) {
-        $purchase = $result->fetch_assoc();
-        ?>
-
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Invoice - <?php echo $purchase['invoice_number']; ?></title>
-            <style>
-                body {
-                    font-family: Arial, sans-serif;
-                    margin: 0;
-                    padding: 0;
-                    background-color: #f4f4f4;
-                }
-
-                .invoice-container {
-                    max-width: 800px;
-                    margin: 30px auto;
-                    padding: 30px;
-                    background-color: #fff;
-                    border-radius: 8px;
-                    box-shadow: 0 0 20px rgba(0, 0, 0, 0.1);
-                }
-
-                .header {
-                    text-align: center;
-                    margin-bottom: 30px;
-                    border-bottom: 2px solid #007bff;
-                    padding-bottom: 10px;
-                }
-
-                .header h1 {
-                    margin: 0 0 5px 0;
-                    color: #007bff;
-                }
-
-                .header p {
-                    margin: 0 0 10px 0;
-                    font-size: 14px;
-                    color: #555;
-                }
-
-                .details {
-                    margin-bottom: 30px;
-                    display: flex;
-                    justify-content: space-between;
-                    font-size: 14px;
-                }
-
-                .details .seller-info {
-                    width: 45%;
-                }
-
-                .details .purchase-info {
-                    width: 45%;
-                    text-align: right;
-                }
-
-                .details h3 {
-                    margin: 0 0 10px 0;
-                    color: #333;
-                }
-
-                table {
-                    width: 100%;
-                    border-collapse: collapse;
-                    margin-bottom: 30px;
-                    border: 1px solid #ddd;
-                }
-
-                th,
-                td {
-                    padding: 12px;
-                    text-align: left;
-                    border-bottom: 1px solid #ddd;
-                }
-
-                th {
-                    background-color: #f0f0f0;
-                    font-weight: bold;
-                }
-
-                .total {
-                    text-align: right;
-                    margin-top: 20px;
-                    font-size: 16px;
-                    font-weight: bold;
-                    color: #333;
-                }
-                 .footer {
-                    text-align: center;
-                    margin-top: 30px;
-                    padding-top: 10px;
-                    border-top: 1px solid #ddd;
-                    font-size: 12px;
-                    color: #888;
-                }
-
-            </style>
-        </head>
-        <body>
-            <div class="invoice-container">
-                <div class="header">
-                    <h1>Your Shop Name</h1>
-                    <p>Address: Your Shop Address</p>
-                    <p>Phone: Your Shop Phone Number</p>
-                </div>
-                <div class="details">
-                    <div class="seller-info">
-                        <h3>Seller Details</h3>
-                        <p><strong>Name:</strong> <?php echo $purchase['seller_name']; ?></p>
-                        <p><strong>Address:</strong> <?php echo $purchase['seller_address']; ?></p>
-                        <p><strong>Phone:</strong> <?php echo $purchase['seller_phone']; ?></p>
-                    </div>
-                    <div class="purchase-info">
-                        <p><strong>Invoice Number:</strong> <?php echo $purchase['invoice_number']; ?></p>
-                        <p><strong>Purchase Date:</strong> <?php echo $purchase['purchase_date']; ?></p>
-                        <p><strong>Payment Method:</strong> <?php echo $purchase['payment_method']; ?></p>
-                    </div>
-                </div>
-
-                <h3>Purchase Details</h3>
-                <table>
-                    <thead>
-                        <tr>
-                            <th>Product</th>
-                            <th>Quantity</th>
-                            <th>Price</th>
-                            <th>Total</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <tr>
-                            <td><?php echo $purchase['product_name']; ?></td>
-                            <td><?php echo $purchase['quantity']; ?></td>
-                            <td><?php echo $purchase['price']; ?></td>
-                            <td><?php echo $purchase['total']; ?></td>
-                        </tr>
-                    </tbody>
-                </table>
-
-                <div class="total">
-                    <p><strong>Paid:</strong> <?php echo $purchase['paid']; ?></p>
-                    <p><strong>Due:</strong> <?php echo $purchase['due']; ?></p>
-                </div>
-                 <div class="footer">
-                    <p>Thank you for your business!</p>
-                </div>
-            </div>
-        </body>
-        </html>
-
-        <?php
-    } else {
-        echo "Invoice not found.";
-    }
-} else {
-    echo "Invoice number not provided.";
+// Check if invoice_number is provided
+if (!isset($_GET['invoice_number']) || empty($_GET['invoice_number'])) {
+    die("Invoice number not provided.");
 }
 
-include '../includes/footer.php';
+$invoice_number = sanitizeInput($_GET['invoice_number']);
+
+// Fetch purchase details (main purchase record)
+$purchaseSql = "SELECT p.*, s.name as seller_name, s.phone as seller_phone, s.address as seller_address 
+                FROM purchases p 
+                LEFT JOIN sellers s ON p.seller_id = s.id 
+                WHERE p.invoice_number = ? AND p.product_id IS NULL";
+$stmt = $conn->prepare($purchaseSql);
+$stmt->bind_param("s", $invoice_number);
+$stmt->execute();
+$purchaseResult = $stmt->get_result();
+
+if ($purchaseResult->num_rows == 0) {
+    die("Invoice not found.");
+}
+
+$purchase = $purchaseResult->fetch_assoc();
+
+// Fetch purchased products
+$itemsSql = "SELECT p.*, pr.name as product_name, pr.brand_name, pr.type as product_type 
+             FROM purchases p 
+             LEFT JOIN products pr ON p.product_id = pr.id 
+             WHERE p.invoice_number = ? AND p.product_id IS NOT NULL";
+$stmt = $conn->prepare($itemsSql);
+$stmt->bind_param("s", $invoice_number);
+$stmt->execute();
+$itemsResult = $stmt->get_result();
+
+// Fetch shop settings
+$shop_name = getShopSetting('shop_name', $conn);
+$shop_address = getShopSetting('shop_address', $conn);
+$shop_phone = getShopSetting('shop_phone', $conn);
 ?>
+
+<h2>Invoice</h2>
+
+<div class="invoice">
+    <div class="invoice-header">
+        <h1><?php echo htmlspecialchars($shop_name); ?></h1>
+        <p>Address: <?php echo htmlspecialchars($shop_address); ?></p>
+        <p>Phone: <?php echo htmlspecialchars($shop_phone); ?></p>
+    </div>
+
+    <div class="invoice-details">
+        <div class="invoice-info">
+            <h3>Invoice Number: <?php echo htmlspecialchars($invoice_number); ?></h3>
+            <p>Date: <?php echo htmlspecialchars($purchase['purchase_date']); ?></p>
+        </div>
+        <div class="seller-info">
+            <h3>Seller Information</h3>
+            <p>Name: <?php echo htmlspecialchars($purchase['seller_name'] ?? 'N/A'); ?></p>
+            <p>Phone: <?php echo htmlspecialchars($purchase['seller_phone'] ?? 'N/A'); ?></p>
+            <p>Address: <?php echo htmlspecialchars($purchase['seller_address'] ?? 'N/A'); ?></p>
+        </div>
+    </div>
+
+    <h3>Purchased Products</h3>
+    <table>
+        <thead>
+            <tr>
+                <th>Product Name</th>
+                <th>Quantity</th>
+                <th>Unit</th>
+                <th>Type</th>
+                <th>Price</th>
+                <th>Subtotal</th>
+            </tr>
+        </thead>
+        <tbody>
+            <?php
+            if ($itemsResult->num_rows > 0) {
+                while ($item = $itemsResult->fetch_assoc()) {
+                    $subtotal = $item['quantity'] * $item['price'];
+                    $productDisplay = htmlspecialchars($item['product_name'] . " (" . $item['brand_name'] . ", " . ($item['product_type'] ?: 'N/A') . ")");
+                    echo "<tr>";
+                    echo "<td>" . $productDisplay . "</td>";
+                    echo "<td>" . htmlspecialchars($item['quantity']) . "</td>";
+                    echo "<td>" . htmlspecialchars($item['unit']) . "</td>";
+                    echo "<td>" . htmlspecialchars($item['type'] ?: 'N/A') . "</td>";
+                    echo "<td>" . number_format($item['price'], 2) . "</td>";
+                    echo "<td>" . number_format($subtotal, 2) . "</td>";
+                    echo "</tr>";
+                }
+            } else {
+                echo "<tr><td colspan='6'>No products found for this invoice</td></tr>";
+            }
+            ?>
+        </tbody>
+    </table>
+
+    <div class="invoice-summary">
+        <p><strong>Total:</strong> <?php echo number_format($purchase['total'], 2); ?></p>
+        <p><strong>Paid:</strong> <?php echo number_format($purchase['paid'], 2); ?></p>
+        <p><strong>Due:</strong> <?php echo number_format($purchase['due'], 2); ?></p>
+        <p><strong>Payment Method:</strong> <?php echo htmlspecialchars(ucfirst($purchase['payment_method'])); ?></p>
+    </div>
+
+    <button onclick="window.print()">Print Invoice</button>
+</div>
+
+<style>
+.invoice {
+    background-color: #fff;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+    margin-bottom: 20px;
+}
+
+.invoice-header {
+    text-align: center;
+    margin-bottom: 20px;
+}
+
+.invoice-details {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 20px;
+}
+
+.invoice-info, .seller-info {
+    width: 45%;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 20px;
+}
+
+th, td {
+    padding: 12px;
+    text-align: left;
+    border-bottom: 1px solid #ddd;
+}
+
+th {
+    background-color: #4CAF50;
+    color: white;
+}
+
+tr:nth-child(even) {
+    background-color: #f9f9f9;
+}
+
+tr:hover {
+    background-color: #f1f1f1;
+}
+
+.invoice-summary {
+    text-align: right;
+    margin-top: 20px;
+}
+
+button {
+    background-color: #4CAF50;
+    color: white;
+    padding: 10px 20px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+}
+
+button:hover {
+    background-color: #45a049;
+}
+
+@media print {
+    .invoice {
+        box-shadow: none;
+        border: none;
+    }
+    button {
+        display: none;
+    }
+    .sidebar, .header {
+        display: none;
+    }
+}
+</style>
+
+<?php include '../includes/footer.php'; ?>

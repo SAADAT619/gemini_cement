@@ -48,13 +48,38 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
         $quantity = floatval(sanitizeInput($_POST['quantity']));
         $unit = sanitizeInput($_POST['unit']);
 
-        $sql = "INSERT INTO products (category_id, name, price, quantity, unit, brand_name, type)
-                VALUES ($category_id, '$name', $price, $quantity, '$unit', '$brand_name', '$type')";
+        // Check if a product with the same name, category, unit, price, brand_name, and type already exists
+        $checkSql = "SELECT id, quantity FROM products 
+                     WHERE name = '$name' 
+                     AND category_id = $category_id 
+                     AND unit = '$unit' 
+                     AND price = $price 
+                     AND brand_name = '$brand_name' 
+                     AND (type = '$type' OR (type IS NULL AND '$type' = ''))";
+        $checkResult = $conn->query($checkSql);
 
-        if ($conn->query($sql) === TRUE) {
-            $message = "Product added successfully";
+        if ($checkResult->num_rows > 0) {
+            // Product exists, update the quantity
+            $existingProduct = $checkResult->fetch_assoc();
+            $newQuantity = $existingProduct['quantity'] + $quantity;
+            $updateSql = "UPDATE products 
+                          SET quantity = $newQuantity 
+                          WHERE id = " . $existingProduct['id'];
+            if ($conn->query($updateSql) === TRUE) {
+                $message = "Product quantity updated successfully";
+            } else {
+                $error = "Error updating product quantity: " . $conn->error;
+            }
         } else {
-            $error = "Error adding product: " . $conn->error;
+            // Product does not exist, insert a new product
+            $sql = "INSERT INTO products (category_id, name, price, quantity, unit, brand_name, type)
+                    VALUES ($category_id, '$name', $price, $quantity, '$unit', '$brand_name', '$type')";
+
+            if ($conn->query($sql) === TRUE) {
+                $message = "Product added successfully";
+            } else {
+                $error = "Error adding product: " . $conn->error;
+            }
         }
     } elseif (isset($_POST['delete_product'])) {
         $id = sanitizeInput($_POST['id']);
@@ -88,11 +113,21 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
 $categorySql = "SELECT * FROM categories";
 $categoryResult = $conn->query($categorySql);
 
-// Fetch products for listing
+// Fetch products for listing, ordered by created_at DESC to show newest first
 $productSql = "SELECT products.*, categories.name as category_name 
                FROM products 
-               LEFT JOIN categories ON products.category_id = categories.id";
+               LEFT JOIN categories ON products.category_id = categories.id 
+               ORDER BY products.created_at DESC";
 $productResult = $conn->query($productSql);
+
+// Create a category mapping for JavaScript
+$categoryNames = [];
+if ($categoryResult->num_rows > 0) {
+    $categoryResult->data_seek(0); // Reset pointer
+    while ($row = $categoryResult->fetch_assoc()) {
+        $categoryNames[$row['id']] = $row['name'];
+    }
+}
 ?>
 
 <h2>Category & Products</h2>
@@ -156,7 +191,7 @@ $productResult = $conn->query($productSql);
 <div class="section">
     <h3>Add Product</h3>
     <form method="post" class="product-form">
-        <select name="category_id" required>
+        <select name="category_id" id="category_id" required onchange="updateUnitDropdown()">
             <option value="">Select Category</option>
             <?php
             $categoryResult->data_seek(0);
@@ -172,7 +207,9 @@ $productResult = $conn->query($productSql);
         <input type="text" name="type" placeholder="Type (e.g., 8mm for Rod, leave blank for Cement)"><br>
         <input type="number" name="price" placeholder="Price" step="0.01" required><br>
         <input type="number" name="quantity" placeholder="Quantity" step="0.01" required><br>
-        <input type="text" name="unit" placeholder="Unit (e.g., kg, gram, ton, piece, inch, feet, cm)" required><br>
+        <select name="unit" id="unit" required>
+            <option value="">Select Unit</option>
+        </select><br>
         <button type="submit" name="add_product">Add Product</button>
     </form>
 
@@ -222,7 +259,7 @@ $productResult = $conn->query($productSql);
         <h3>Edit Product</h3>
         <form method="post">
             <input type="hidden" name="id" id="edit_product_id">
-            <select name="category_id" id="edit_category_id" required>
+            <select name="category_id" id="edit_category_id" required onchange="updateEditUnitDropdown()">
                 <option value="">Select Category</option>
                 <?php
                 $categoryResult->data_seek(0);
@@ -238,7 +275,9 @@ $productResult = $conn->query($productSql);
             <input type="text" name="type" id="edit_type" placeholder="Type"><br>
             <input type="number" name="price" id="edit_price" placeholder="Price" step="0.01" required><br>
             <input type="number" name="quantity" id="edit_quantity" placeholder="Quantity" step="0.01" required><br>
-            <input type="text" name="unit" id="edit_unit" placeholder="Unit" required><br>
+            <select name="unit" id="edit_unit" required>
+                <option value="">Select Unit</option>
+            </select><br>
             <button type="submit" name="update_product">Update Product</button>
             <button type="button" onclick="document.getElementById('edit_product_form').style.display='none';">Cancel</button>
         </form>
@@ -246,6 +285,84 @@ $productResult = $conn->query($productSql);
 </div>
 
 <script>
+    // Category mapping from PHP
+    const categoryNames = <?php echo json_encode($categoryNames); ?>;
+
+    console.log("Category Names Mapping:", categoryNames); // Debug: Check the mapping
+
+    function updateUnitDropdown() {
+        console.log("updateUnitDropdown called"); // Debug: Check if function is called
+        var categoryId = document.getElementById('category_id').value;
+        console.log("Selected Category ID:", categoryId); // Debug: Check selected category ID
+        var unitDropdown = document.getElementById('unit');
+        unitDropdown.innerHTML = '<option value="">Select Unit</option>';
+
+        if (!categoryId || !categoryNames[categoryId]) {
+            console.log("No category selected or category not found for category ID:", categoryId);
+            return; // No category selected or category not found
+        }
+
+        var categoryName = categoryNames[categoryId].toLowerCase().trim();
+        console.log("Category Name:", categoryName); // Debug: Check category name
+
+        if (categoryName === 'cement') {
+            var units = ['bags', 'kg', 'gram'];
+        } else if (categoryName === 'rod') {
+            var units = ['ton', 'piece', 'inches'];
+        } else {
+            console.log("Unrecognized category:", categoryName);
+            return; // No units if category is not recognized
+        }
+
+        console.log("Units to populate:", units); // Debug: Check units array
+        units.forEach(function(unit) {
+            var option = document.createElement('option');
+            option.value = unit;
+            option.text = unit;
+            unitDropdown.appendChild(option);
+        });
+    }
+
+    function updateEditUnitDropdown() {
+        console.log("updateEditUnitDropdown called"); // Debug: Check if function is called
+        var categoryId = document.getElementById('edit_category_id').value;
+        console.log("Selected Edit Category ID:", categoryId); // Debug: Check selected category ID
+        var unitDropdown = document.getElementById('edit_unit');
+        unitDropdown.innerHTML = '<option value="">Select Unit</option>';
+
+        if (!categoryId || !categoryNames[categoryId]) {
+            console.log("No category selected or category not found for category ID:", categoryId);
+            return; // No category selected or category not found
+        }
+
+        var categoryName = categoryNames[categoryId].toLowerCase().trim();
+        console.log("Edit Category Name:", categoryName); // Debug: Check category name
+
+        if (categoryName === 'cement') {
+            var units = ['bags', 'kg', 'gram'];
+        } else if (categoryName === 'rod') {
+            var units = ['ton', 'piece', 'inches'];
+        } else {
+            console.log("Unrecognized category:", categoryName);
+            return; // No units if category is not recognized
+        }
+
+        console.log("Edit Units to populate:", units); // Debug: Check units array
+        units.forEach(function(unit) {
+            var option = document.createElement('option');
+            option.value = unit;
+            option.text = unit;
+            unitDropdown.appendChild(option);
+        });
+
+        // Pre-select the unit if editing
+        var currentUnit = document.getElementById('edit_unit').dataset.currentUnit;
+        console.log("Current Unit to pre-select:", currentUnit); // Debug: Check current unit
+        if (currentUnit) {
+            unitDropdown.value = currentUnit;
+        }
+    }
+
     function editCategory(id, name) {
         document.getElementById('edit_category_form').style.display = 'block';
         document.getElementById('edit_id').value = id;
@@ -253,33 +370,19 @@ $productResult = $conn->query($productSql);
     }
 
     function editProduct(id, category_id, name, brand_name, type, price, quantity, unit) {
+        console.log("editProduct called with unit:", unit); // Debug: Check unit passed to edit
         document.getElementById('edit_product_form').style.display = 'block';
         document.getElementById('edit_product_id').value = id;
+        document.getElementById('edit_category_id').value = category_id;
         document.getElementById('edit_name').value = name;
         document.getElementById('edit_brand_name').value = brand_name;
         document.getElementById('edit_type').value = type;
         document.getElementById('edit_price').value = price;
         document.getElementById('edit_quantity').value = quantity;
-        document.getElementById('edit_unit').value = unit;
 
-        // Populate the category dropdown
-        var categoryDropdown = document.getElementById("edit_category_id");
-        categoryDropdown.innerHTML = ''; // Clear existing options
+        document.getElementById('edit_unit').dataset.currentUnit = unit;
 
-        <?php
-        $categoryResult->data_seek(0);
-        if ($categoryResult->num_rows > 0) {
-            while ($categoryRow = $categoryResult->fetch_assoc()) {
-                echo "var option = document.createElement('option');";
-                echo "option.value = '" . $categoryRow['id'] . "';";
-                echo "option.text = '" . htmlspecialchars($categoryRow['name']) . "';";
-                echo "if (" . $categoryRow['id'] . " == category_id) {";
-                echo "  option.selected = true;";
-                echo "}";
-                echo "categoryDropdown.appendChild(option);";
-            }
-        }
-        ?>
+        updateEditUnitDropdown();
     }
 </script>
 

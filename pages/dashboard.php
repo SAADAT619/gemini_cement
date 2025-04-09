@@ -5,7 +5,7 @@ if (!isset($_SESSION['user_email'])) {
     exit();
 }
 include '../config/database.php';
-include '../core/functions.php'; // Include the functions.php file
+include '../core/functions.php';
 include '../includes/header.php';
 include '../includes/sidebar.php';
 
@@ -117,6 +117,8 @@ $topCustomersResult = $conn->query($topCustomersSql);
         <tr>
             <th>Product Name</th>
             <th>Category</th>
+            <th>Brand</th>
+            <th>Type</th>
             <th>Quantity</th>
             <th>Unit</th>
             <th>Price</th>
@@ -131,6 +133,8 @@ $topCustomersResult = $conn->query($topCustomersSql);
                 echo "<tr" . ($lowStock ? " class='low-stock'" : "") . ">";
                 echo "<td>" . htmlspecialchars($product['name']) . "</td>";
                 echo "<td>" . htmlspecialchars(getCategoryName($product['category_id'], $conn)) . "</td>";
+                echo "<td>" . htmlspecialchars(isset($product['brand_name']) ? $product['brand_name'] : 'N/A') . "</td>";
+                echo "<td>" . htmlspecialchars(isset($product['type']) ? ($product['type'] ?: 'N/A') : 'N/A') . "</td>";
                 echo "<td>" . htmlspecialchars($product['quantity']) . "</td>";
                 echo "<td>" . htmlspecialchars($product['unit'] ?? 'N/A') . "</td>";
                 echo "<td>" . number_format($product['price'], 2) . "</td>";
@@ -138,7 +142,7 @@ $topCustomersResult = $conn->query($topCustomersSql);
                 echo "</tr>";
             }
         } else {
-            echo "<tr><td colspan='6'>No products found</td></tr>";
+            echo "<tr><td colspan='8'>No products found</td></tr>";
         }
         ?>
     </tbody>

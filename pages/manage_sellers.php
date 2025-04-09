@@ -44,8 +44,8 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
     }
 }
 
-// Fetch sellers for display
-$sellerSql = "SELECT * FROM sellers";
+// Fetch sellers for display, ordered by created_at DESC to show newest first
+$sellerSql = "SELECT * FROM sellers ORDER BY created_at DESC";
 $sellerResult = $conn->query($sellerSql);
 ?>
 
@@ -81,11 +81,11 @@ $sellerResult = $conn->query($sellerSql);
         if ($sellerResult->num_rows > 0) {
             while ($sellerRow = $sellerResult->fetch_assoc()) {
                 echo "<tr>";
-                echo "<td>" . $sellerRow['name'] . "</td>";
-                echo "<td>" . $sellerRow['phone'] . "</td>";
-                echo "<td>" . $sellerRow['address'] . "</td>";
+                echo "<td>" . htmlspecialchars($sellerRow['name']) . "</td>";
+                echo "<td>" . htmlspecialchars($sellerRow['phone']) . "</td>";
+                echo "<td>" . htmlspecialchars($sellerRow['address']) . "</td>";
                 echo "<td>";
-                echo "<button onclick=\"editSeller(" . $sellerRow['id'] . ", '" . $sellerRow['name'] . "', '" . $sellerRow['phone'] . "', '" . $sellerRow['address'] . "')\">Edit</button> | ";
+                echo "<button onclick=\"editSeller(" . $sellerRow['id'] . ", '" . htmlspecialchars($sellerRow['name']) . "', '" . htmlspecialchars($sellerRow['phone']) . "', '" . htmlspecialchars($sellerRow['address']) . "')\">Edit</button> | ";
                 echo "<form method='post' style='display:inline;'><input type='hidden' name='id' value='" . $sellerRow['id'] . "'><button type='submit' name='delete_seller'>Delete</button></form>";
                 echo "</td>";
                 echo "</tr>";
@@ -118,5 +118,95 @@ $sellerResult = $conn->query($sellerSql);
         document.getElementById('edit_address').value = address;
     }
 </script>
+
+<style>
+/* Form styling */
+form {
+    background-color: #fff;
+    padding: 20px;
+    border-radius: 8px;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
+    margin-bottom: 20px;
+}
+
+input[type="text"], textarea {
+    width: 100%;
+    padding: 10px;
+    margin: 5px 0;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    box-sizing: border-box;
+}
+
+textarea {
+    height: 100px;
+    resize: vertical;
+}
+
+button {
+    background-color: #4CAF50;
+    color: white;
+    padding: 10px 20px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    margin-right: 10px;
+}
+
+button:hover {
+    background-color: #45a049;
+}
+
+button[type="submit"][name="delete_seller"] {
+    background-color: #d32f2f;
+}
+
+button[type="submit"][name="delete_seller"]:hover {
+    background-color: #b71c1c;
+}
+
+/* Table styling */
+table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-bottom: 20px;
+}
+
+th, td {
+    padding: 12px;
+    text-align: left;
+    border-bottom: 1px solid #ddd;
+}
+
+th {
+    background-color: #4CAF50;
+    color: white;
+}
+
+tr:nth-child(even) {
+    background-color: #f9f9f9;
+}
+
+tr:hover {
+    background-color: #f1f1f1;
+}
+
+/* Success and error messages */
+.success {
+    color: green;
+    background-color: #e0f7fa;
+    padding: 10px;
+    border-radius: 4px;
+    margin-bottom: 20px;
+}
+
+.error {
+    color: #d32f2f;
+    background-color: #ffebee;
+    padding: 10px;
+    border-radius: 4px;
+    margin-bottom: 20px;
+}
+</style>
 
 <?php include '../includes/footer.php'; ?>

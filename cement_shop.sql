@@ -23,7 +23,7 @@ CREATE TABLE categories (
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
 
--- Table: products
+-- Table: products (Updated with unique constraint and index)
 CREATE TABLE products (
     id INT AUTO_INCREMENT PRIMARY KEY,
     category_id INT,
@@ -31,9 +31,19 @@ CREATE TABLE products (
     price DECIMAL(10, 2) NOT NULL,
     quantity INT NOT NULL CHECK (quantity >= 0), -- Prevent negative stock at the database level
     unit VARCHAR(50),
+    brand_name VARCHAR(255), -- Added to store the brand name (e.g., BSRM)
+    type VARCHAR(50) NOT NULL DEFAULT '', -- Changed to NOT NULL with default empty string to handle unique constraint
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-    FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE SET NULL
+    FOREIGN KEY (category_id) REFERENCES categories(id) ON DELETE SET NULL,
+    -- Add unique constraint to prevent duplicates
+    UNIQUE KEY uk_products (name, category_id, unit, price, brand_name, type)
 );
+
+-- Add an index on created_at to improve sorting performance (e.g., for displaying newest products first)
+CREATE INDEX idx_products_created_at ON products (created_at);
+
+-- Add a composite index for faster lookups when checking for existing products
+CREATE INDEX idx_products_lookup ON products (name, category_id, unit, price, brand_name, type);
 
 -- Table: sellers
 CREATE TABLE sellers (
@@ -57,6 +67,7 @@ CREATE TABLE purchases (
     purchase_date DATE NOT NULL,
     payment_method VARCHAR(50) NOT NULL,
     invoice_number VARCHAR(20) NOT NULL UNIQUE,
+    unit VARCHAR(50) NOT NULL, -- Added unit column
     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
     FOREIGN KEY (seller_id) REFERENCES sellers(id) ON DELETE SET NULL,
     FOREIGN KEY (product_id) REFERENCES products(id) ON DELETE SET NULL,
@@ -129,10 +140,11 @@ INSERT INTO categories (name) VALUES
 ('Cement'),
 ('Rod');
 
--- Insert sample products
-INSERT INTO products (category_id, name, price, quantity, unit) VALUES 
-(1, '7 Rings', 550.00, 15, 'bag'),
-(2, 'BSRM', 250.00, 20, 'piece');
+-- Insert sample products (Consolidated duplicates and updated type to use empty string instead of NULL)
+INSERT INTO products (category_id, name, price, quantity, unit, brand_name, type) VALUES 
+(1, '7 Rings', 550.00, 15, 'bag', '7 Rings', ''), -- Type is empty string instead of NULL
+(2, 'BSRM', 250.00, 20, 'piece', 'BSRM', '8mm'),
+(2, 'Rod', 250.00, 40, 'piece', 'BSRM', '8mm'); -- Consolidated duplicate "Rod" entries (20 + 20 = 40)
 
 -- Insert sample customers
 INSERT INTO customers (name, phone, address) VALUES 
@@ -147,10 +159,10 @@ INSERT INTO sellers (name, phone, address) VALUES
 ('Seller One', '0987654321', '456 Seller Avenue'),
 ('Seller Two', '1122334455', '789 Seller Lane');
 
--- Insert sample purchases (for testing)
-INSERT INTO purchases (seller_id, product_id, quantity, price, total, paid, due, purchase_date, payment_method, invoice_number) VALUES 
-(1, 1, 10, 500.00, 5000.00, 4000.00, 1000.00, '2025-03-28', 'cash', 'PUR-20250328001'),
-(2, 2, 15, 200.00, 3000.00, 3000.00, 0.00, '2025-03-28', 'bank_transfer', 'PUR-20250328002');
+-- Insert sample purchases (for testing, with unit)
+INSERT INTO purchases (seller_id, product_id, quantity, price, total, paid, due, purchase_date, payment_method, invoice_number, unit) VALUES 
+(1, 1, 10, 500.00, 5000.00, 4000.00, 1000.00, '2025-03-28', 'cash', 'PUR-20250328001', 'bag'),
+(2, 2, 15, 200.00, 3000.00, 3000.00, 0.00, '2025-03-28', 'bank_transfer', 'PUR-20250328002', 'piece');
 
 -- Insert sample sales (for testing)
 INSERT INTO sales (customer_id, sale_date, invoice_number, payment_method, total, paid, due) VALUES 

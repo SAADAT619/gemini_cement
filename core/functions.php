@@ -58,8 +58,9 @@ function getMonthlySales($conn) {
 
 // Function to get product stock
 function getProductStock($conn) {
-    $sql = "SELECT p.id, p.name, p.category_id, p.quantity, p.price, p.unit
-            FROM products p";
+    $sql = "SELECT p.id, p.name, p.category_id, p.quantity, p.price, p.unit, p.brand_name, p.type
+            FROM products p
+            ORDER BY p.category_id ASC, p.name ASC";
     $result = $conn->query($sql);
     if (!$result) {
         error_log("getProductStock Query Error: " . $conn->error);
