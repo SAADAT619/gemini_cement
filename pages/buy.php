@@ -610,10 +610,15 @@ if (isset($_GET['edit_id'])) {
     <?php } ?>
 </form>
 
+<!-- Search Bar -->
+<div class="search-container">
+    <input type="text" id="searchInput" placeholder="Search purchases (e.g., seller, invoice, date, product)..." onkeyup="searchPurchases()">
+</div>
+
 <!-- Purchase List -->
 <h3>Purchase List</h3>
 <?php if ($purchaseListResult && $purchaseListResult->num_rows > 0) { ?>
-    <table>
+    <table id="purchaseTable">
         <thead>
             <tr>
                 <th>Invoice Number</th>
@@ -630,10 +635,10 @@ if (isset($_GET['edit_id'])) {
         </thead>
         <tbody>
             <?php while ($purchase = $purchaseListResult->fetch_assoc()) { ?>
-                <tr>
-                    <td><?php echo htmlspecialchars($purchase['invoice_number']); ?></td>
-                    <td><?php echo htmlspecialchars($purchase['seller_name']); ?></td>
-                    <td>
+                <tr class="purchase-row">
+                    <td class="invoice-number"><?php echo htmlspecialchars($purchase['invoice_number']); ?></td>
+                    <td class="seller-name"><?php echo htmlspecialchars($purchase['seller_name']); ?></td>
+                    <td class="product-details-cell">
                         <?php
                         $itemsSql = "SELECT pi.*, p.name as product_name 
                                      FROM purchase_items pi 
@@ -643,9 +648,11 @@ if (isset($_GET['edit_id'])) {
                         $itemsStmt->bind_param("i", $purchase['id']);
                         $itemsStmt->execute();
                         $itemsResult = $itemsStmt->get_result();
+                        $productNames = [];
                         if ($itemsResult->num_rows > 0) {
                             echo "<ul class='product-details'>";
                             while ($item = $itemsResult->fetch_assoc()) {
+                                $productNames[] = htmlspecialchars($item['product_name'] ?? 'Unknown Product');
                                 echo "<li>";
                                 echo "<strong>" . htmlspecialchars($item['product_name'] ?? 'Unknown Product') . "</strong>";
                                 echo "<ul>";
@@ -664,14 +671,17 @@ if (isset($_GET['edit_id'])) {
                             echo "No products found.";
                         }
                         $itemsStmt->close();
+                        // Store product names in a data attribute for searching
+                        $productNamesStr = implode(', ', $productNames);
                         ?>
+                        <span class="product-names" style="display: none;"><?php echo $productNamesStr; ?></span>
                     </td>
-                    <td><?php echo htmlspecialchars($purchase['purchase_date']); ?></td>
-                    <td><?php echo htmlspecialchars($purchase['payment_method']); ?></td>
-                    <td><?php echo number_format($purchase['total'], 2); ?></td>
-                    <td><?php echo number_format($purchase['paid'], 2); ?></td>
-                    <td><?php echo number_format($purchase['due'], 2); ?></td>
-                    <td><?php echo htmlspecialchars($purchase['created_at']); ?></td>
+                    <td class="purchase-date"><?php echo htmlspecialchars($purchase['purchase_date']); ?></td>
+                    <td class="payment-method"><?php echo htmlspecialchars($purchase['payment_method']); ?></td>
+                    <td class="total"><?php echo number_format($purchase['total'], 2); ?></td>
+                    <td class="paid"><?php echo number_format($purchase['paid'], 2); ?></td>
+                    <td class="due"><?php echo number_format($purchase['due'], 2); ?></td>
+                    <td class="created-at"><?php echo htmlspecialchars($purchase['created_at']); ?></td>
                     <td class="action-buttons">
                         <a href="buy.php?edit_id=<?php echo $purchase['id']; ?>" class="btn btn-primary">Edit</a>
                         <a href="buy.php?delete_id=<?php echo $purchase['id']; ?>" class="btn btn-danger" onclick="return confirm('Are you sure you want to delete this purchase?');">Delete</a>
@@ -829,6 +839,41 @@ function calculateDue() {
     const paid = parseFloat(document.getElementById('paid').value) || 0;
     const due = grandTotal - paid;
     document.getElementById('due').value = due.toFixed(2);
+}
+
+function searchPurchases() {
+    const input = document.getElementById('searchInput');
+    const filter = input.value.trim().toLowerCase(); // Trim whitespace and convert to lowercase
+    const table = document.getElementById('purchaseTable');
+    const rows = table.getElementsByClassName('purchase-row');
+
+    for (let i = 0; i < rows.length; i++) {
+        const row = rows[i];
+        const invoiceNumber = row.getElementsByClassName('invoice-number')[0].textContent.toLowerCase();
+        const sellerName = row.getElementsByClassName('seller-name')[0].textContent.toLowerCase();
+        const productNames = row.getElementsByClassName('product-names')[0].textContent.toLowerCase();
+        const purchaseDate = row.getElementsByClassName('purchase-date')[0].textContent.toLowerCase();
+        const paymentMethod = row.getElementsByClassName('payment-method')[0].textContent.toLowerCase();
+        const total = row.getElementsByClassName('total')[0].textContent.toLowerCase();
+        const paid = row.getElementsByClassName('paid')[0].textContent.toLowerCase();
+        const due = row.getElementsByClassName('due')[0].textContent.toLowerCase();
+
+        // Check if any field matches the search term
+        if (
+            invoiceNumber.includes(filter) ||
+            sellerName.includes(filter) ||
+            productNames.includes(filter) ||
+            purchaseDate.includes(filter) ||
+            paymentMethod.includes(filter) ||
+            total.includes(filter) ||
+            paid.includes(filter) ||
+            due.includes(filter)
+        ) {
+            row.style.display = '';
+        } else {
+            row.style.display = 'none';
+        }
+    }
 }
 
 // Initialize product items
@@ -1012,6 +1057,26 @@ th:last-child, td.action-buttons {
     padding: 0;
     background-color: transparent;
     font-size: 0.95em;
+}
+
+/* Search Bar Styling */
+.search-container {
+    margin-bottom: 20px;
+}
+
+#searchInput {
+    width: 100%;
+    padding: 10px;
+    font-size: 16px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    box-sizing: border-box;
+}
+
+#searchInput:focus {
+    outline: none;
+    border-color: #4CAF50;
+    box-shadow: 0 0 5px rgba(76, 175, 80, 0.3);
 }
 </style>
 
