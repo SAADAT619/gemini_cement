@@ -1,9 +1,11 @@
 <?php
 session_start();
+
 if (!isset($_SESSION['user_email'])) {
     header("Location: login.php");
     exit();
 }
+
 include '../config/database.php';
 include '../core/functions.php';
 include '../includes/header.php';
@@ -11,135 +13,186 @@ include '../includes/sidebar.php';
 
 // Function to check if stock is sufficient
 function checkStockAvailability($conn, $product_id, $quantity) {
-    $stmt = $conn->prepare("SELECT quantity FROM products WHERE id = ?");
-    $stmt->bind_param("i", $product_id);
-    $stmt->execute();
-    $result = $stmt->get_result();
-    if ($result && $result->num_rows > 0) {
+    if (!is_numeric($product_id) || $product_id <= 0 || !is_numeric($quantity) || $quantity <= 0) {
+        return false;
+    }
+    $product_id = (int)$product_id;
+    $sql = "SELECT quantity FROM products WHERE id = $product_id";
+    $result = $conn->query($sql);
+    if ($result === false) {
+        error_log("checkStockAvailability Query Error: " . $conn->error);
+        return false;
+    }
+    if ($result->num_rows > 0) {
         $product = $result->fetch_assoc();
-        $stmt->close();
         return $product['quantity'] >= $quantity;
     }
-    $stmt->close();
     return false;
 }
 
 // Function to get the total previous due for a customer
 function getCustomerPreviousDue($conn, $customer_id) {
-    $stmt = $conn->prepare("SELECT SUM(due) as total_due FROM sales WHERE customer_id = ?");
-    $stmt->bind_param("i", $customer_id);
-    $stmt->execute();
-    $result = $stmt->get_result();
+    if (!is_numeric($customer_id) || $customer_id <= 0) {
+        return 0;
+    }
+    $customer_id = (int)$customer_id;
+    $sql = "SELECT SUM(due) as total_due FROM sales WHERE customer_id = $customer_id";
+    $result = $conn->query($sql);
+    if ($result === false) {
+        error_log("getCustomerPreviousDue Query Error: " . $conn->error);
+        return 0;
+    }
     $row = $result->fetch_assoc();
-    $stmt->close();
     return $row['total_due'] ?? 0;
+}
+
+// Function to generate a unique invoice number for sales
+function generateSaleInvoiceNumber($conn) {
+    $prefix = "SALE-" . date("Ymd");
+    $likePattern = $conn->real_escape_string($prefix . '%');
+    $sql = "SELECT invoice_number FROM sales WHERE invoice_number LIKE '$likePattern' ORDER BY invoice_number DESC LIMIT 1";
+    $result = $conn->query($sql);
+    if ($result === false) {
+        error_log("generateSaleInvoiceNumber Query Error: " . $conn->error);
+        return false;
+    }
+    $number = 1;
+    if ($result->num_rows > 0) {
+        $row = $result->fetch_assoc();
+        $lastNumber = (int)substr($row['invoice_number'], -3);
+        $number = $lastNumber + 1;
+    }
+    return $prefix . str_pad($number, 3, "0", STR_PAD_LEFT);
 }
 
 // Handle sale form submissions
 if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['add_sale'])) {
-    $customer_id = sanitizeInput($_POST['customer_id']);
+    $customer_id = (int)sanitizeInput($_POST['customer_id']);
     $sale_date = sanitizeInput($_POST['sale_date']);
-    $payment_method = sanitizeInput($_POST['payment_method']);
-    $invoice_number = generateInvoiceNumber();
+    $payment_method_id = (int)sanitizeInput($_POST['payment_method']);
+    $invoice_number = generateSaleInvoiceNumber($conn);
     $paid = floatval(sanitizeInput($_POST['paid']));
     $include_previous_due = isset($_POST['include_previous_due']) ? 1 : 0;
 
     // Validate inputs
-    if (empty($customer_id) || empty($sale_date) || empty($payment_method) || !isset($_POST['product_id']) || !isset($_POST['quantity']) || !isset($_POST['price'])) {
-        $error = "Please fill in all required fields.";
+    if (empty($customer_id) || $customer_id <= 0) {
+        $error = "Invalid customer selected.";
+    } elseif (empty($sale_date) || !strtotime($sale_date)) {
+        $error = "Invalid sale date.";
+    } elseif (empty($payment_method_id) || $payment_method_id <= 0) {
+        $error = "Invalid payment method selected.";
+    } elseif (!isset($_POST['product_id']) || !is_array($_POST['product_id']) || empty($_POST['product_id'])) {
+        $error = "At least one product must be selected.";
+    } elseif (!isset($_POST['quantity']) || !is_array($_POST['quantity']) || empty($_POST['quantity'])) {
+        $error = "Product quantities are required.";
+    } elseif (!isset($_POST['price']) || !is_array($_POST['price']) || empty($_POST['price'])) {
+        $error = "Product prices are required.";
+    } elseif ($paid < 0) {
+        $error = "Paid amount cannot be negative.";
+    } elseif (!$invoice_number) {
+        $error = "Failed to generate invoice number.";
     } else {
-        // Validate stock availability before proceeding
+        // Validate stock availability
         $stock_error = false;
-        for ($i = 0; $i < count($_POST['product_id']); $i++) {
-            $product_id = sanitizeInput($_POST['product_id'][$i]);
+        $product_count = count($_POST['product_id']);
+        for ($i = 0; $i < $product_count; $i++) {
+            $product_id = (int)sanitizeInput($_POST['product_id'][$i]);
             $quantity = floatval(sanitizeInput($_POST['quantity'][$i]));
+            if ($product_id <= 0) {
+                $stock_error = true;
+                $error = "Invalid product selected at position " . ($i + 1) . ".";
+                break;
+            }
+            if ($quantity <= 0) {
+                $stock_error = true;
+                $error = "Quantity must be greater than 0 for product at position " . ($i + 1) . ".";
+                break;
+            }
             if (!checkStockAvailability($conn, $product_id, $quantity)) {
                 $stock_error = true;
-                $error = "Insufficient stock for product ID $product_id. Requested: $quantity, Available: " . getProductStockById($conn, $product_id)['quantity'];
+                $error = "Insufficient stock for product ID $product_id. Requested: $quantity, Available: " . (getProductStockById($conn, $product_id)['quantity'] ?? 0);
                 break;
             }
         }
 
         if (!$stock_error) {
-            // Start a transaction for atomicity
-            $conn->begin_transaction();
+            try {
+                $conn->begin_transaction();
 
-            // Get previous due for the customer
-            $previous_due = getCustomerPreviousDue($conn, $customer_id);
-            $previous_due_to_add = $include_previous_due ? $previous_due : 0;
+                $previous_due = getCustomerPreviousDue($conn, $customer_id);
+                $previous_due_to_add = $include_previous_due ? $previous_due : 0;
 
-            // 1. Insert into 'sales' table using prepared statement
-            $stmt = $conn->prepare("INSERT INTO sales (customer_id, sale_date, invoice_number, payment_method, paid, total, due) VALUES (?, ?, ?, ?, ?, 0, 0)");
-            $stmt->bind_param("isssd", $customer_id, $sale_date, $invoice_number, $payment_method, $paid);
-            if ($stmt->execute()) {
-                $sale_id = $conn->insert_id; // Get the ID of the new sale
+                // Insert into 'sales' table
+                $customer_id = (int)$customer_id;
+                $sale_date = $conn->real_escape_string($sale_date);
+                $invoice_number = $conn->real_escape_string($invoice_number);
+                $payment_method_id = (int)$payment_method_id;
+                $paid = (float)$paid;
+                $sql = "INSERT INTO sales (customer_id, sale_date, invoice_number, payment_method_id, paid, total, due) 
+                        VALUES ($customer_id, '$sale_date', '$invoice_number', $payment_method_id, $paid, 0, 0)";
+                if (!$conn->query($sql)) {
+                    throw new Exception("Error adding sale: " . $conn->error);
+                }
+                $sale_id = $conn->insert_id;
+
+                // Debug: Log the sale_id and sale_date
+                error_log("New Sale Added - ID: $sale_id, Date: $sale_date");
+
                 $total = 0;
 
-                // 2. Insert into 'sale_items' table
-                for ($i = 0; $i < count($_POST['product_id']); $i++) {
-                    $product_id = sanitizeInput($_POST['product_id'][$i]);
+                // Insert into 'sale_items' table
+                for ($i = 0; $i < $product_count; $i++) {
+                    $product_id = (int)sanitizeInput($_POST['product_id'][$i]);
                     $quantity = floatval(sanitizeInput($_POST['quantity'][$i]));
                     $price = floatval(sanitizeInput($_POST['price'][$i]));
                     $subtotal = $quantity * $price;
 
-                    $stmt_items = $conn->prepare("INSERT INTO sale_items (sale_id, product_id, quantity, price, subtotal) VALUES (?, ?, ?, ?, ?)");
-                    $stmt_items->bind_param("iidd", $sale_id, $product_id, $quantity, $price, $subtotal);
-                    if (!$stmt_items->execute()) {
-                        $error = "Error adding sale item: " . $stmt_items->error;
-                        $conn->rollback();
-                        $stmt_items->close();
-                        break;
+                    if ($price <= 0) {
+                        throw new Exception("Price must be greater than 0 for product at position " . ($i + 1) . ".");
                     }
-                    $stmt_items->close();
 
-                    // 3. Update product quantity
-                    $stmt_update = $conn->prepare("UPDATE products SET quantity = GREATEST(quantity - ?, 0) WHERE id = ?");
-                    $stmt_update->bind_param("di", $quantity, $product_id);
-                    if (!$stmt_update->execute()) {
-                        $error = "Error updating product quantity: " . $stmt_update->error;
-                        $conn->rollback();
-                        $stmt_update->close();
-                        break;
+                    $sale_id = (int)$sale_id;
+                    $product_id = (int)$product_id;
+                    $quantity = (float)$quantity;
+                    $price = (float)$price;
+                    $subtotal = (float)$subtotal;
+                    $sql = "INSERT INTO sale_items (sale_id, product_id, quantity, price, subtotal) 
+                            VALUES ($sale_id, $product_id, $quantity, $price, $subtotal)";
+                    if (!$conn->query($sql)) {
+                        throw new Exception("Error adding sale item: " . $conn->error);
                     }
-                    $stmt_update->close();
 
                     $total += $subtotal;
                 }
 
-                // 4. Update the 'sales' table with the total and due
-                $total_with_previous_due = $total + $previous_due_to_add;
-                $due = $total_with_previous_due - $paid;
+                // Update the 'sales' table with the total and due
+                $total_with_previous_due = (float)($total + $previous_due_to_add);
+                $due = (float)($total_with_previous_due - $paid);
+                $sale_id = (int)$sale_id;
+                $sql = "UPDATE sales SET total = $total_with_previous_due, due = $due WHERE id = $sale_id";
+                if (!$conn->query($sql)) {
+                    throw new Exception("Error updating sale total: " . $conn->error);
+                }
 
-                $stmt_update_sales = $conn->prepare("UPDATE sales SET total = ?, due = ? WHERE id = ?");
-                $stmt_update_sales->bind_param("ddi", $total_with_previous_due, $due, $sale_id);
-                if (!$stmt_update_sales->execute()) {
-                    $error = "Error updating sale total: " . $stmt_update_sales->error;
-                    $conn->rollback();
-                } else {
-                    // If previous due was included, reset the due of previous sales to 0
-                    if ($include_previous_due && $previous_due > 0) {
-                        $stmt_reset_due = $conn->prepare("UPDATE sales SET due = 0 WHERE customer_id = ? AND id != ?");
-                        $stmt_reset_due->bind_param("ii", $customer_id, $sale_id);
-                        if (!$stmt_reset_due->execute()) {
-                            $error = "Error resetting previous due: " . $stmt_reset_due->error;
-                            $conn->rollback();
-                        }
-                        $stmt_reset_due->close();
-                    }
-
-                    if (!isset($error)) {
-                        $conn->commit();
-                        $message = "Sale added successfully. Invoice Number: $invoice_number";
-                        header("Location: sell.php?message=" . urlencode($message));
-                        exit();
+                // Reset previous due if included
+                if ($include_previous_due && $previous_due > 0) {
+                    $customer_id = (int)$customer_id;
+                    $sale_id = (int)$sale_id;
+                    $sql = "UPDATE sales SET due = 0 WHERE customer_id = $customer_id AND id != $sale_id";
+                    if (!$conn->query($sql)) {
+                        throw new Exception("Error resetting previous due: " . $conn->error);
                     }
                 }
-                $stmt_update_sales->close();
-            } else {
-                $error = "Error adding sale: " . $stmt->error;
+
+                $conn->commit();
+                $message = "Sale added successfully. Invoice Number: $invoice_number";
+                header("Location: sell.php?message=" . urlencode($message));
+                exit();
+            } catch (Exception $e) {
                 $conn->rollback();
+                $error = $e->getMessage();
+                error_log("Add Sale Error: " . $error);
             }
-            $stmt->close();
         }
     }
 }
@@ -147,22 +200,39 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['add_sale'])) {
 // Fetch customers for dropdown
 $customerSql = "SELECT * FROM customers";
 $customerResult = $conn->query($customerSql);
+if ($customerResult === false) {
+    $error = "Error fetching customers: " . $conn->error;
+}
 
-// Fetch products for dropdown (using getProductStock to include stock data)
+// Fetch products for dropdown
 $products = getProductStock($conn);
+if (empty($products)) {
+    error_log("No products found in the database.");
+}
 
-// Fetch sales for initial listing (this will be replaced by AJAX)
-$stmt_sales = $conn->prepare("SELECT sales.*, customers.name as customer_name, customers.phone as customer_phone, customers.address as customer_address 
+// Fetch payment methods
+$paymentSql = "SELECT id, method FROM payment_methods ORDER BY method ASC";
+$paymentResult = $conn->query($paymentSql);
+if ($paymentResult === false) {
+    $error = "Error fetching payment methods: " . $conn->error;
+}
+
+// Fetch sales for initial listing (cast sale_date to DATE to ignore time)
+$sql = "SELECT sales.*, customers.name as customer_name, customers.phone as customer_phone, customers.address as customer_address 
         FROM sales 
         LEFT JOIN customers ON sales.customer_id = customers.id 
-        ORDER BY sales.sale_date DESC");
-$stmt_sales->execute();
-$salesResult = $stmt_sales->get_result();
+        ORDER BY DATE(sales.sale_date) DESC, sales.id DESC";
+$salesResult = $conn->query($sql);
+if ($salesResult === false) {
+    $error = "Error fetching sales: " . $conn->error;
+}
 
 // Fetch sale items for listing
-$stmt_sale_items = $conn->prepare("SELECT sale_items.*, products.name as product_name FROM sale_items LEFT JOIN products ON sale_items.product_id = products.id");
-$stmt_sale_items->execute();
-$saleItemsResult = $stmt_sale_items->get_result();
+$sql = "SELECT sale_items.*, products.name as product_name FROM sale_items LEFT JOIN products ON sale_items.product_id = products.id";
+$saleItemsResult = $conn->query($sql);
+if ($saleItemsResult === false) {
+    $error = "Error fetching sale items: " . $conn->error;
+}
 ?>
 
 <h2>Sell Products</h2>
@@ -176,16 +246,21 @@ $saleItemsResult = $stmt_sale_items->get_result();
 } ?>
 
 <form method="post">
-    <select name="customer_id" id="customer_id" required onchange="fetchPreviousDue(this.value)">
-        <option value="">Select Customer</option>
-        <?php
-        if ($customerResult->num_rows > 0) {
-            while ($customerRow = $customerResult->fetch_assoc()) {
-                echo "<option value='" . $customerRow['id'] . "'>" . $customerRow['name'] . "</option>";
+    <div class="form-group">
+        <label for="customer_id">Select Customer</label>
+        <select name="customer_id" id="customer_id" required onchange="fetchPreviousDue(this.value)">
+            <option value="">Select Customer</option>
+            <?php
+            if ($customerResult && $customerResult->num_rows > 0) {
+                while ($customerRow = $customerResult->fetch_assoc()) {
+                    echo "<option value='" . $customerRow['id'] . "'>" . htmlspecialchars($customerRow['name']) . "</option>";
+                }
+            } else {
+                echo "<option value='' disabled>No customers available</option>";
             }
-        }
-        ?>
-    </select><br>
+            ?>
+        </select>
+    </div>
 
     <div id="previous_due_container" style="display:none;">
         <strong>Previous Due:</strong> <span id="previous_due">0.00</span><br>
@@ -197,10 +272,15 @@ $saleItemsResult = $stmt_sale_items->get_result();
             <select name="product_id[]" required>
                 <option value="">Select Product</option>
                 <?php
-                if (count($products) > 0) {
+                if (!empty($products)) {
                     foreach ($products as $product) {
-                        echo "<option value='" . $product['id'] . "'>" . $product['name'] . " (Stock: " . $product['quantity'] . " " . ($product['unit'] ?? '') . ")</option>";
+                        $stock_status = $product['quantity'] > 0 ? "" : "disabled";
+                        $stock_display = "Stock: " . $product['quantity'] . " " . ($product['unit'] ?? '');
+                        $display_text = htmlspecialchars("{$product['name']} ({$product['category_name']}) - {$product['brand_name']} - {$stock_display}");
+                        echo "<option value='{$product['id']}' $stock_status>$display_text</option>";
                     }
+                } else {
+                    echo "<option value='' disabled>No products available</option>";
                 }
                 ?>
             </select>
@@ -212,17 +292,37 @@ $saleItemsResult = $stmt_sale_items->get_result();
     </div>
     <button type="button" id="add_product">Add Product</button><br>
 
-    <input type="number" name="paid" id="paid" placeholder="Paid Amount" min="0" step="0.01" required oninput="validateInput(this); calculateDue()"><br>
-    <strong>Total:</strong> <span id="total">0.00</span><br>
-    <strong>Due:</strong> <span id="due">0.00</span><br>
-    <input type="date" name="sale_date" required><br>
-    <select name="payment_method" required>
-        <option value="">Select Payment Method</option>
-        <option value="cash">Cash</option>
-        <option value="credit_card">Credit Card</option>
-        <option value="bank_transfer">Bank Transfer</option>
-        <option value="other">Other</option>
-    </select><br>
+    <div class="form-group">
+        <label for="paid">Paid Amount</label>
+        <input type="number" name="paid" id="paid" placeholder="Paid Amount" min="0" step="0.01" required oninput="validateInput(this); calculateDue()">
+    </div>
+
+    <div class="form-group">
+        <strong>Total:</strong> <span id="total">0.00</span><br>
+        <strong>Due:</strong> <span id="due">0.00</span>
+    </div>
+
+    <div class="form-group">
+        <label for="sale_date">Sale Date</label>
+        <input type="date" name="sale_date" required value="<?php echo date('Y-m-d'); ?>">
+    </div>
+
+    <div class="form-group">
+        <label for="payment_method">Payment Method</label>
+        <select name="payment_method" id="payment_method" required>
+            <option value="">Select Payment Method</option>
+            <?php
+            if ($paymentResult && $paymentResult->num_rows > 0) {
+                while ($payment = $paymentResult->fetch_assoc()) {
+                    echo "<option value='{$payment['id']}'>" . htmlspecialchars($payment['method']) . "</option>";
+                }
+            } else {
+                echo "<option value='' disabled>No payment methods available</option>";
+            }
+            ?>
+        </select>
+    </div>
+
     <button type="submit" name="add_sale">Add Sale</button>
 </form>
 
@@ -230,12 +330,10 @@ $saleItemsResult = $stmt_sale_items->get_result();
 
 <h3>Sale List</h3>
 
-<!-- Single Search Form -->
 <div class="search-container">
-    <input type="text" id="search_input" placeholder="Search by Name, Phone, Address, or Invoice Number" oninput="searchSales()">
+    <input type="text" id="search_input" placeholder="Search by Name, Phone, Address, or Invoice Number" oninput="searchSales()" value="">
 </div>
 
-<!-- Sales Table (to be updated dynamically) -->
 <table id="sales_table">
     <thead>
         <tr>
@@ -252,18 +350,26 @@ $saleItemsResult = $stmt_sale_items->get_result();
     </thead>
     <tbody id="sales_table_body">
         <?php
-        if ($salesResult->num_rows > 0) {
+        if (isset($salesResult) && $salesResult->num_rows > 0) {
             while ($saleRow = $salesResult->fetch_assoc()) {
+                $payment_method_id = (int)$saleRow['payment_method_id'];
+                $paymentMethodSql = "SELECT method FROM payment_methods WHERE id = $payment_method_id";
+                $paymentResultDisplay = $conn->query($paymentMethodSql);
+                if ($paymentResultDisplay && $paymentResultDisplay->num_rows > 0) {
+                    $paymentMethod = $paymentResultDisplay->fetch_assoc()['method'];
+                } else {
+                    $paymentMethod = 'N/A';
+                }
+
                 echo "<tr>";
                 echo "<td>" . htmlspecialchars($saleRow['invoice_number']) . "</td>";
-                echo "<td>" . htmlspecialchars($saleRow['customer_name']) . "</td>";
+                echo "<td>" . htmlspecialchars($saleRow['customer_name'] ?? 'N/A') . "</td>";
                 echo "<td>";
-                // Display the products for each sale
                 $sale_id = $saleRow['id'];
                 $saleItemsResult->data_seek(0);
                 while ($saleItemRow = $saleItemsResult->fetch_assoc()) {
                     if ($saleItemRow['sale_id'] == $sale_id) {
-                        echo htmlspecialchars($saleItemRow['product_name']) . " (" . $saleItemRow['quantity'] . ")<br>";
+                        echo htmlspecialchars($saleItemRow['product_name'] ?? 'Unknown Product') . " (" . $saleItemRow['quantity'] . ")<br>";
                     }
                 }
                 echo "</td>";
@@ -271,7 +377,7 @@ $saleItemsResult = $stmt_sale_items->get_result();
                 echo "<td>" . number_format($saleRow['paid'], 2) . "</td>";
                 echo "<td>" . number_format($saleRow['due'], 2) . "</td>";
                 echo "<td>" . htmlspecialchars($saleRow['sale_date']) . "</td>";
-                echo "<td>" . htmlspecialchars($saleRow['payment_method']) . "</td>";
+                echo "<td>" . htmlspecialchars($paymentMethod) . "</td>";
                 echo "<td>";
                 echo "<button onclick=\"generateInvoice('" . htmlspecialchars($saleRow['invoice_number']) . "')\">Invoice</button>";
                 echo "</td>";
@@ -285,14 +391,12 @@ $saleItemsResult = $stmt_sale_items->get_result();
 </table>
 
 <script>
-// Function to validate input and ensure non-negative values
 function validateInput(input) {
     if (input.value < 0) {
-        input.value = 0; // Set to 0 if the user tries to input a negative value
+        input.value = 0;
     }
 }
 
-// Function to fetch previous due for the selected customer
 function fetchPreviousDue(customerId) {
     if (customerId === "") {
         document.getElementById('previous_due_container').style.display = 'none';
@@ -309,7 +413,7 @@ function fetchPreviousDue(customerId) {
                 try {
                     var response = JSON.parse(xhr.responseText);
                     if (response.error) {
-                        alert("Error: " + response.error);
+                        alert("Error: " . response.error);
                         return;
                     }
 
@@ -319,10 +423,10 @@ function fetchPreviousDue(customerId) {
                     document.getElementById('include_previous_due').checked = false;
                     calculateTotal();
                 } catch (e) {
-                    alert("Error parsing previous due: " + e.message);
+                    alert("Error parsing previous due: " . e.message);
                 }
             } else {
-                alert("Error fetching previous due: " + xhr.status + " " + xhr.statusText);
+                alert("Error fetching previous due: " . xhr.status + " " . xhr.statusText);
             }
         }
     };
@@ -347,7 +451,6 @@ function calculateTotal() {
         total += subtotal;
     }
 
-    // Add previous due if the checkbox is checked
     var includePreviousDue = document.getElementById('include_previous_due').checked;
     var previousDue = parseFloat(document.getElementById('previous_due').textContent) || 0;
     if (includePreviousDue) {
@@ -384,14 +487,32 @@ function addProductRow() {
     var select = document.createElement('select');
     select.name = 'product_id[]';
     select.required = true;
+    
+    var defaultOption = document.createElement('option');
+    defaultOption.value = '';
+    defaultOption.text = 'Select Product';
+    select.appendChild(defaultOption);
+
     <?php
-    if (count($products) > 0) {
+    if (!empty($products)) {
         foreach ($products as $product) {
+            $stock_status = $product['quantity'] > 0 ? "" : "disabled";
+            $stock_display = "Stock: " . $product['quantity'] . " " . ($product['unit'] ?? '');
+            $display_text = htmlspecialchars("{$product['name']} ({$product['category_name']}) - {$product['brand_name']} - {$stock_display}");
             echo "var option = document.createElement('option');";
             echo "option.value = '" . $product['id'] . "';";
-            echo "option.text = '" . $product['name'] . " (Stock: " . $product['quantity'] . " " . ($product['unit'] ?? '') . ")';";
+            echo "option.text = '" . $display_text . "';";
+            if ($product['quantity'] <= 0) {
+                echo "option.disabled = true;";
+            }
             echo "select.appendChild(option);";
         }
+    } else {
+        echo "var option = document.createElement('option');";
+        echo "option.value = '';";
+        echo "option.text = 'No products available';";
+        echo "option.disabled = true;";
+        echo "select.appendChild(option);";
     }
     ?>
 
@@ -437,7 +558,6 @@ document.getElementById('add_product').addEventListener('click', function() {
     addProductRow();
 });
 
-// Real-time search function
 function searchSales() {
     var searchTerm = document.getElementById('search_input').value;
 
@@ -447,16 +567,48 @@ function searchSales() {
             if (xhr.status == 200) {
                 document.getElementById('sales_table_body').innerHTML = xhr.responseText;
             } else {
-                console.error("Error fetching sales: " + xhr.status + " " + xhr.statusText);
+                console.error("Error fetching sales: " . xhr.status + " " . xhr.statusText);
             }
         }
     };
     xhr.open("GET", "search_sales.php?search=" + encodeURIComponent(searchTerm), true);
     xhr.send();
 }
+
+window.onload = function() {
+    document.getElementById('search_input').value = '';
+};
 </script>
 
 <style>
+.form-group {
+    margin-bottom: 15px;
+}
+.form-group label {
+    display: block;
+    margin-bottom: 5px;
+}
+.form-group input, .form-group select {
+    width: 100%;
+    padding: 8px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+}
+.product_item {
+    border: 1px solid #ddd;
+    padding: 15px;
+    margin-bottom: 15px;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+.product_item select {
+    width: 300px;
+}
+.product_item input[type="number"] {
+    width: 100px;
+}
 .remove_product {
     margin-left: 10px;
     color: red;
@@ -468,9 +620,19 @@ function searchSales() {
 .remove_product:hover {
     color: darkred;
 }
-input[type="number"] {
-    width: 100px;
-    padding: 5px;
+button {
+    padding: 10px 20px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    margin: 5px 0;
+}
+button[type="submit"], button[type="button"] {
+    background-color: #4CAF50;
+    color: white;
+}
+button[type="button"]:hover, button[type="submit"]:hover {
+    background-color: #45a049;
 }
 .success {
     color: green;
@@ -519,9 +681,5 @@ tr:hover {
 
 <?php
 include '../includes/footer.php';
-
-// Close prepared statements
-$stmt_sales->close();
-$stmt_sale_items->close();
 $conn->close();
 ?>

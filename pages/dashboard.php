@@ -4,184 +4,233 @@ if (!isset($_SESSION['user_email'])) {
     header("Location: login.php");
     exit();
 }
+
 include '../config/database.php';
 include '../core/functions.php';
 include '../includes/header.php';
 include '../includes/sidebar.php';
 
-// Fetch product stock and other dashboard data with error handling
-$products = getProductStock($conn);
-if ($products === false) {
-    $products = [];
-    $error = "Error fetching product stock: " . $conn->error;
+// Check database connection
+if ($conn->connect_error) {
+    die("Database connection failed: " . $conn->connect_error);
 }
 
-// Fetch the low stock threshold from settings
-$lowStockThresholdSql = "SELECT value FROM settings WHERE setting_key = 'low_stock_threshold'";
-$lowStockThresholdResult = $conn->query($lowStockThresholdSql);
-$lowStockThreshold = $lowStockThresholdResult && $lowStockThresholdResult->num_rows > 0 ? (int)$lowStockThresholdResult->fetch_assoc()['value'] : 5;
+// Initialize variables for statistics
+$dailyBuy = $dailySell = $dailyDue = 0;
+$monthlyBuy = $monthlySell = $monthlyDue = 0;
 
-// Fetch daily sales amount (for today)
+// Fetch daily statistics (today's data)
 $today = date('Y-m-d');
-$dailySalesSql = "SELECT SUM(total) as daily_sales FROM sales WHERE DATE(sale_date) = '$today'";
-$dailySalesResult = $conn->query($dailySalesSql);
-$dailySales = $dailySalesResult && $dailySalesResult->num_rows > 0 ? $dailySalesResult->fetch_assoc()['daily_sales'] : 0;
 
-// Fetch monthly sales amount (for the current month)
-$currentMonth = date('Y-m');
-$monthlySalesSql = "SELECT SUM(total) as monthly_sales FROM sales WHERE DATE_FORMAT(sale_date, '%Y-%m') = '$currentMonth'";
-$monthlySalesResult = $conn->query($monthlySalesSql);
-$monthlySales = $monthlySalesResult && $monthlySalesResult->num_rows > 0 ? $monthlySalesResult->fetch_assoc()['monthly_sales'] : 0;
-
-// Fetch daily buy amount (for today)
-$dailyBuySql = "SELECT SUM(total) as daily_buy FROM purchases WHERE DATE(purchase_date) = '$today'";
+// Daily Purchases (Buy)
+$dailyBuySql = "SELECT COALESCE(SUM(total), 0) as total_buy, COALESCE(SUM(due), 0) as total_due 
+                FROM purchase_headers 
+                WHERE DATE(purchase_date) = CURDATE()";
 $dailyBuyResult = $conn->query($dailyBuySql);
-$dailyBuy = $dailyBuyResult && $dailyBuyResult->num_rows > 0 ? $dailyBuyResult->fetch_assoc()['daily_buy'] : 0;
+if ($dailyBuyResult === false) {
+    $error = "Error fetching daily purchases: " . $conn->error;
+    error_log("Daily purchases query failed in dashboard.php: " . $conn->error);
+} else {
+    $dailyBuyRow = $dailyBuyResult->fetch_assoc();
+    $dailyBuy = $dailyBuyRow['total_buy'];
+    $dailyDue += $dailyBuyRow['total_due']; // Add purchase due to total daily due
+}
 
-// Fetch monthly buy amount (for the current month)
-$monthlyBuySql = "SELECT SUM(total) as monthly_buy FROM purchases WHERE DATE_FORMAT(purchase_date, '%Y-%m') = '$currentMonth'";
+// Daily Sales (Sell)
+$dailySellSql = "SELECT COALESCE(SUM(total), 0) as total_sell, COALESCE(SUM(due), 0) as total_due 
+                 FROM sales 
+                 WHERE DATE(sale_date) = CURDATE()";
+$dailySellResult = $conn->query($dailySellSql);
+if ($dailySellResult === false) {
+    $error = "Error fetching daily sales: " . $conn->error;
+    error_log("Daily sales query failed in dashboard.php: " . $conn->error);
+} else {
+    $dailySellRow = $dailySellResult->fetch_assoc();
+    $dailySell = $dailySellRow['total_sell'];
+    $dailyDue += $dailySellRow['total_due']; // Add sales due to total daily due
+}
+
+// Monthly Statistics (current month)
+$monthlyBuySql = "SELECT COALESCE(SUM(total), 0) as total_buy, COALESCE(SUM(due), 0) as total_due 
+                  FROM purchase_headers 
+                  WHERE YEAR(purchase_date) = YEAR(CURDATE()) 
+                  AND MONTH(purchase_date) = MONTH(CURDATE())";
 $monthlyBuyResult = $conn->query($monthlyBuySql);
-$monthlyBuy = $monthlyBuyResult && $monthlyBuyResult->num_rows > 0 ? $monthlyBuyResult->fetch_assoc()['monthly_buy'] : 0;
+if ($monthlyBuyResult === false) {
+    $error = "Error fetching monthly purchases: " . $conn->error;
+    error_log("Monthly purchases query failed in dashboard.php: " . $conn->error);
+} else {
+    $monthlyBuyRow = $monthlyBuyResult->fetch_assoc();
+    $monthlyBuy = $monthlyBuyRow['total_buy'];
+    $monthlyDue += $monthlyBuyRow['total_due']; // Add purchase due to total monthly due
+}
 
-// Fetch total due amount
-$totalDueSql = "SELECT SUM(due) as total_due FROM sales";
-$totalDueResult = $conn->query($totalDueSql);
-$totalDue = $totalDueResult && $totalDueResult->num_rows > 0 ? $totalDueResult->fetch_assoc()['total_due'] : 0;
+$monthlySellSql = "SELECT COALESCE(SUM(total), 0) as total_sell, COALESCE(SUM(due), 0) as total_due 
+                   FROM sales 
+                   WHERE YEAR(sale_date) = YEAR(CURDATE()) 
+                   AND MONTH(sale_date) = MONTH(CURDATE())";
+$monthlySellResult = $conn->query($monthlySellSql);
+if ($monthlySellResult === false) {
+    $error = "Error fetching monthly sales: " . $conn->error;
+    error_log("Monthly sales query failed in dashboard.php: " . $conn->error);
+} else {
+    $monthlySellRow = $monthlySellResult->fetch_assoc();
+    $monthlySell = $monthlySellRow['total_sell'];
+    $monthlyDue += $monthlySellRow['total_due']; // Add sales due to total monthly due
+}
 
-// Fetch top 5 customers by total sales
-$topCustomersSql = "SELECT c.id, c.name, SUM(s.total) as total_sales 
-                    FROM customers c 
-                    JOIN sales s ON c.id = s.customer_id 
-                    GROUP BY c.id, c.name 
-                    ORDER BY total_sales DESC 
-                    LIMIT 5";
-$topCustomersResult = $conn->query($topCustomersSql);
+// Fetch stock list
+$stockSql = "SELECT p.*, c.name as category_name 
+             FROM products p 
+             LEFT JOIN categories c ON p.category_id = c.id 
+             ORDER BY p.name ASC";
+$stockResult = $conn->query($stockSql);
+if ($stockResult === false) {
+    $error = "Error fetching stock list: " . $conn->error;
+    error_log("Stock list query failed in dashboard.php: " . $conn->error);
+}
 ?>
 
 <h2>Dashboard</h2>
 
-<?php if (isset($error)) {
-    echo "<p class='error'>$error</p>";
-} ?>
+<?php if (isset($error)) { ?>
+    <p class="error"><?php echo htmlspecialchars($error); ?></p>
+<?php } ?>
 
-<div class="dashboard-summary">
-    <div class="summary-card">
-        <h3>Daily Sales</h3>
-        <p><?php echo number_format($dailySales, 2); ?></p>
-    </div>
-    <div class="summary-card">
-        <h3>Monthly Sales</h3>
-        <p><?php echo number_format($monthlySales, 2); ?></p>
-    </div>
-    <div class="summary-card">
-        <h3>Daily Buy</h3>
-        <p><?php echo number_format($dailyBuy, 2); ?></p>
-    </div>
-    <div class="summary-card">
-        <h3>Monthly Buy</h3>
-        <p><?php echo number_format($monthlyBuy, 2); ?></p>
-    </div>
-    <div class="summary-card">
-        <h3>Total Due</h3>
-        <p><?php echo number_format($totalDue, 2); ?></p>
+<!-- Daily Statistics -->
+<div class="stats-container">
+    <h3>Daily Statistics (<?php echo htmlspecialchars($today); ?>)</h3>
+    <div class="stats-box">
+        <div class="stat">
+            <h4>Total Buy</h4>
+            <p><?php echo number_format($dailyBuy, 2); ?></p>
+        </div>
+        <div class="stat">
+            <h4>Total Sell</h4>
+            <p><?php echo number_format($dailySell, 2); ?></p>
+        </div>
+        <div class="stat">
+            <h4>Total Due</h4>
+            <p><?php echo number_format($dailyDue, 2); ?></p>
+        </div>
     </div>
 </div>
 
-<h3>Top 5 Customers by Sales</h3>
-<table>
-    <thead>
-        <tr>
-            <th>Customer Name</th>
-            <th>Total Sales</th>
-        </tr>
-    </thead>
-    <tbody>
-        <?php
-        if ($topCustomersResult && $topCustomersResult->num_rows > 0) {
-            while ($customer = $topCustomersResult->fetch_assoc()) {
-                echo "<tr>";
-                echo "<td>" . htmlspecialchars($customer['name']) . "</td>";
-                echo "<td>" . number_format($customer['total_sales'], 2) . "</td>";
-                echo "</tr>";
-            }
-        } else {
-            echo "<tr><td colspan='2'>No customers found</td></tr>";
-        }
-        ?>
-    </tbody>
-</table>
+<!-- Monthly Statistics -->
+<div class="stats-container">
+    <h3>Monthly Statistics (<?php echo date('F Y'); ?>)</h3>
+    <div class="stats-box">
+        <div class="stat">
+            <h4>Total Buy</h4>
+            <p><?php echo number_format($monthlyBuy, 2); ?></p>
+        </div>
+        <div class="stat">
+            <h4>Total Sell</h4>
+            <p><?php echo number_format($monthlySell, 2); ?></p>
+        </div>
+        <div class="stat">
+            <h4>Total Due</h4>
+            <p><?php echo number_format($monthlyDue, 2); ?></p>
+        </div>
+    </div>
+</div>
 
-<h3>Product Stock</h3>
-<table>
+<!-- Stock List -->
+<h3>Current Stock</h3>
+<input type="text" id="stockSearch" placeholder="Search stock by name, category, or brand" onkeyup="filterStock()">
+<table id="stockTable">
     <thead>
         <tr>
             <th>Product Name</th>
             <th>Category</th>
             <th>Brand</th>
-            <th>Type</th>
-            <th>Quantity</th>
             <th>Unit</th>
             <th>Price</th>
-            <th>Status</th>
+            <th>Quantity</th>
+            <th>Last Updated</th>
         </tr>
     </thead>
     <tbody>
         <?php
-        if (count($products) > 0) {
-            foreach ($products as $product) {
-                $lowStock = $product['quantity'] <= $lowStockThreshold;
-                echo "<tr" . ($lowStock ? " class='low-stock'" : "") . ">";
-                echo "<td>" . htmlspecialchars($product['name']) . "</td>";
-                echo "<td>" . htmlspecialchars(getCategoryName($product['category_id'], $conn)) . "</td>";
-                echo "<td>" . htmlspecialchars(isset($product['brand_name']) ? $product['brand_name'] : 'N/A') . "</td>";
-                echo "<td>" . htmlspecialchars(isset($product['type']) ? ($product['type'] ?: 'N/A') : 'N/A') . "</td>";
-                echo "<td>" . htmlspecialchars($product['quantity']) . "</td>";
-                echo "<td>" . htmlspecialchars($product['unit'] ?? 'N/A') . "</td>";
-                echo "<td>" . number_format($product['price'], 2) . "</td>";
-                echo "<td>" . ($lowStock ? "<span class='low-stock-warning'>Low Stock</span>" : "In Stock") . "</td>";
-                echo "</tr>";
+        if (isset($stockResult) && $stockResult !== false) {
+            if ($stockResult->num_rows > 0) {
+                while ($stockRow = $stockResult->fetch_assoc()) {
+                    echo "<tr>";
+                    echo "<td>" . htmlspecialchars($stockRow['name']) . "</td>";
+                    echo "<td>" . htmlspecialchars($stockRow['category_name'] ?? 'N/A') . "</td>";
+                    echo "<td>" . htmlspecialchars($stockRow['brand_name'] ?? 'N/A') . "</td>";
+                    echo "<td>" . htmlspecialchars($stockRow['unit'] ?? 'N/A') . "</td>";
+                    echo "<td>" . number_format($stockRow['price'], 2) . "</td>";
+                    echo "<td>" . number_format($stockRow['quantity'], 2) . "</td>";
+                    echo "<td>" . htmlspecialchars($stockRow['updated_at']) . "</td>";
+                    echo "</tr>";
+                }
+            } else {
+                echo "<tr><td colspan='7'>No stock found</td></tr>";
             }
         } else {
-            echo "<tr><td colspan='8'>No products found</td></tr>";
+            echo "<tr><td colspan='7'>Error loading stock list</td></tr>";
         }
         ?>
     </tbody>
 </table>
 
+<script>
+function filterStock() {
+    const input = document.getElementById('stockSearch').value.toLowerCase();
+    const table = document.getElementById('stockTable');
+    const rows = table.getElementsByTagName('tr');
+
+    for (let i = 1; i < rows.length; i++) { // Start from 1 to skip header
+        const cells = rows[i].getElementsByTagName('td');
+        let match = false;
+        for (let j = 0; j < cells.length - 1; j++) { // Exclude last column (Last Updated)
+            if (cells[j].textContent.toLowerCase().indexOf(input) > -1) {
+                match = true;
+                break;
+            }
+        }
+        rows[i].style.display = match ? '' : 'none';
+    }
+}
+</script>
+
 <style>
-/* General styling for the dashboard */
-.dashboard-summary {
-    display: flex;
-    gap: 20px;
+.stats-container {
     margin-bottom: 30px;
 }
 
-.summary-card {
-    background-color: #f5f5f5;
+.stats-box {
+    display: flex;
+    gap: 20px;
+    flex-wrap: wrap;
+}
+
+.stat {
+    background-color: #fff;
     padding: 20px;
     border-radius: 8px;
     box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
     flex: 1;
+    min-width: 200px;
     text-align: center;
 }
 
-.summary-card h3 {
+.stat h4 {
     margin: 0 0 10px;
+    color: #4CAF50;
+}
+
+.stat p {
+    margin: 0;
+    font-size: 1.2em;
     color: #333;
 }
 
-.summary-card p {
-    font-size: 24px;
-    font-weight: bold;
-    color: #2e7d32; /* Green color for emphasis */
-    margin: 0;
-}
-
-/* Table styling */
 table {
     width: 100%;
     border-collapse: collapse;
-    margin-bottom: 30px;
+    margin-bottom: 20px;
 }
 
 th, td {
@@ -203,31 +252,14 @@ tr:hover {
     background-color: #f1f1f1;
 }
 
-.low-stock {
-    background-color: #ffebee; /* Light red for low stock */
+#stockSearch {
+    width: 100%;
+    padding: 10px;
+    margin-bottom: 20px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
 }
 
-.low-stock-warning {
-    color: #d32f2f; /* Red for warning */
-    font-weight: bold;
-}
-
-/* Responsive design */
-@media (max-width: 768px) {
-    .dashboard-summary {
-        flex-direction: column;
-    }
-
-    table {
-        font-size: 14px;
-    }
-
-    th, td {
-        padding: 8px;
-    }
-}
-
-/* Error message styling */
 .error {
     color: #d32f2f;
     background-color: #ffebee;

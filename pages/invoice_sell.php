@@ -13,10 +13,18 @@ if (empty($invoice_number)) {
     die("Invalid invoice number");
 }
 
-// Fetch sale details
-$saleSql = "SELECT sales.*, customers.name as customer_name, customers.phone, customers.address
+// Escape invoice_number to prevent SQL injection
+$invoice_number = $conn->real_escape_string($invoice_number);
+
+// Fetch sale details with payment method
+$saleSql = "SELECT sales.*, 
+                   customers.name as customer_name, 
+                   customers.phone, 
+                   customers.address,
+                   payment_methods.method as payment_method_name
             FROM sales
             LEFT JOIN customers ON sales.customer_id = customers.id
+            LEFT JOIN payment_methods ON sales.payment_method_id = payment_methods.id
             WHERE sales.invoice_number = '$invoice_number'";
 $saleResult = $conn->query($saleSql);
 
@@ -26,10 +34,12 @@ if (!$saleResult || $saleResult->num_rows == 0) {
 $sale = $saleResult->fetch_assoc();
 
 // Fetch sale items
-$saleItemsSql = "SELECT sale_items.*, products.name as product_name, products.unit
+$saleItemsSql = "SELECT sale_items.*, 
+                        products.name as product_name, 
+                        products.unit
                  FROM sale_items
                  LEFT JOIN products ON sale_items.product_id = products.id
-                 WHERE sale_items.sale_id = " . $sale['id'];
+                 WHERE sale_items.sale_id = " . (int)$sale['id'];
 $saleItemsResult = $conn->query($saleItemsSql);
 
 if (!$saleItemsResult) {
@@ -112,7 +122,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['update_shop_details'])
             box-shadow: 0 0 15px rgba(0, 0, 0, 0.1);
         }
         .header {
-            background-color: #2e7d32; /* Darker green for header */
+            background-color: #2e7d32;
             color: white;
             padding: 20px;
             text-align: center;
@@ -145,7 +155,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['update_shop_details'])
         .invoice-details {
             margin: 20px 0;
             padding: 15px;
-            background-color: #e8f5e9; /* Light green background */
+            background-color: #e8f5e9;
             border-radius: 8px;
             display: flex;
             justify-content: space-between;
@@ -165,7 +175,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['update_shop_details'])
             border-bottom: 1px solid #ddd;
         }
         th {
-            background-color: #4CAF50; /* Green for table header */
+            background-color: #4CAF50;
             color: white;
             font-weight: bold;
         }
@@ -173,10 +183,10 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['update_shop_details'])
             font-size: 14px;
         }
         tr:nth-child(even) {
-            background-color: #f9f9f9; /* Light gray for alternating rows */
+            background-color: #f9f9f9;
         }
         tr:hover {
-            background-color: #f1f1f1; /* Hover effect */
+            background-color: #f1f1f1;
         }
         .totals {
             margin-top: 20px;
@@ -194,13 +204,13 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['update_shop_details'])
         .edit-shop-details {
             margin: 30px 0;
             padding: 15px;
-            background-color: #fff3e0; /* Light orange background */
+            background-color: #fff3e0;
             border-radius: 8px;
             box-shadow: 0 0 5px rgba(0, 0, 0, 0.1);
         }
         .edit-shop-details h3 {
             margin-top: 0;
-            color: #e65100; /* Orange for heading */
+            color: #e65100;
         }
         .edit-shop-details input, .edit-shop-details textarea {
             width: 100%;
@@ -231,7 +241,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['update_shop_details'])
             margin-top: 20px;
         }
         .print-button button {
-            background-color: #1976D2; /* Blue for print button */
+            background-color: #1976D2;
             color: white;
             padding: 12px 25px;
             border: none;
@@ -274,7 +284,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['update_shop_details'])
                 <p><strong>Sale Date:</strong> <?php echo htmlspecialchars($sale['sale_date']); ?></p>
             </div>
             <div>
-                <p><strong>Payment Method:</strong> <?php echo htmlspecialchars($sale['payment_method']); ?></p>
+                <p><strong>Payment Method:</strong> <?php echo htmlspecialchars($sale['payment_method_name'] ?? 'N/A'); ?></p>
             </div>
         </div>
 
@@ -329,3 +339,7 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['update_shop_details'])
     </div>
 </body>
 </html>
+
+<?php
+$conn->close();
+?>

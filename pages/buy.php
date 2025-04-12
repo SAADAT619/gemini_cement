@@ -4,375 +4,365 @@ if (!isset($_SESSION['user_email'])) {
     header("Location: login.php");
     exit();
 }
+
 include '../config/database.php';
 include '../core/functions.php';
 include '../includes/header.php';
 include '../includes/sidebar.php';
 
-// Debug: Check database connection
+// Check database connection
 if ($conn->connect_error) {
-    $error = "Database connection failed: " . $conn->connect_error;
-    error_log("Database connection failed in buy.php: " . $conn->connect_error);
+    die("Database connection failed: " . $conn->connect_error);
 }
 
-// Fetch categories for dropdown
-$categorySql = "SELECT * FROM categories";
-$categoryResult = $conn->query($categorySql);
-if ($categoryResult === false) {
-    $error = "Error fetching categories: " . $conn->error;
-    error_log("Categories query failed in buy.php: " . $conn->error);
-}
-
-// Fetch products for dropdown
-$products = getProductStock($conn);
-
-// Fetch sellers for dropdown
-$sellerSql = "SELECT * FROM sellers";
+// Fetch sellers
+$sellerSql = "SELECT id, name FROM sellers ORDER BY name ASC";
 $sellerResult = $conn->query($sellerSql);
 if ($sellerResult === false) {
     $error = "Error fetching sellers: " . $conn->error;
-    error_log("Sellers query failed in buy.php: " . $conn->error);
 }
 
-// Fetch shop details
-$shopSql = "SELECT * FROM shop_details WHERE id = 1"; // Assuming only one shop entry
-$shopResult = $conn->query($shopSql);
-if ($shopResult === false) {
-    $error = "Error fetching shop details: " . $conn->error;
-    error_log("Shop details query failed in buy.php: " . $conn->error);
-} else {
-    $shopDetails = $shopResult->num_rows > 0 ? $shopResult->fetch_assoc() : [
-        'shop_name' => 'Gemini Cement Store',
-        'address' => '123 Business Avenue, City, Country',
-        'phone' => '+123-456-7890',
-        'email' => 'contact@geminicement.com'
-    ];
+// Fetch products for dropdown
+$productSql = "SELECT p.*, c.name as category_name 
+               FROM products p 
+               LEFT JOIN categories c ON p.category_id = c.id 
+               ORDER BY p.name ASC";
+$productResult = $conn->query($productSql);
+if ($productResult === false) {
+    $error = "Error fetching products: " . $conn->error;
 }
 
-// Handle shop details update
-if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['update_shop_details'])) {
-    $shop_name = sanitizeInput($_POST['shop_name']);
-    $address = sanitizeInput($_POST['address']);
-    $phone = sanitizeInput($_POST['phone']);
-    $email = sanitizeInput($_POST['email']);
-
-    // Validate inputs
-    if (empty($shop_name) || empty($address) || empty($phone) || empty($email)) {
-        $error = "All shop details fields are required.";
-    } elseif (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
-        $error = "Invalid email format.";
-    } else {
-        // Check if shop details exist
-        $checkSql = "SELECT id FROM shop_details WHERE id = 1";
-        $checkResult = $conn->query($checkSql);
-        if ($checkResult->num_rows > 0) {
-            // Update existing record
-            $updateSql = "UPDATE shop_details SET shop_name = ?, address = ?, phone = ?, email = ?, updated_at = NOW() WHERE id = 1";
-            $stmt = $conn->prepare($updateSql);
-            $stmt->bind_param("ssss", $shop_name, $address, $phone, $email);
-        } else {
-            // Insert new record
-            $insertSql = "INSERT INTO shop_details (id, shop_name, address, phone, email, updated_at) VALUES (1, ?, ?, ?, ?, NOW())";
-            $stmt = $conn->prepare($insertSql);
-            $stmt->bind_param("ssss", $shop_name, $address, $phone, $email);
-        }
-
-        if ($stmt->execute()) {
-            $message = "Shop details updated successfully.";
-            // Refresh shop details
-            $shopDetails = [
-                'shop_name' => $shop_name,
-                'address' => $address,
-                'phone' => $phone,
-                'email' => $email
-            ];
-        } else {
-            $error = "Error updating shop details: " . $stmt->error;
-        }
-    }
+// Fetch payment methods
+$paymentSql = "SELECT id, method FROM payment_methods ORDER BY method ASC";
+$paymentResult = $conn->query($paymentSql);
+if ($paymentResult === false) {
+    $error = "Error fetching payment methods: " . $conn->error;
 }
 
-// Define unit options for categories
-$unitOptions = [
-    'Cement' => ['bag', 'kg', 'gram'],
-    'Rod' => ['piece', 'ton', 'inches']
-];
+// Fetch rod types for Rod category
+$rodTypeSql = "SELECT id, type FROM rod_types ORDER BY type ASC";
+$rodTypeResult = $conn->query($rodTypeSql);
+if ($rodTypeResult === false) {
+    $error = "Error fetching rod types: " . $conn->error;
+}
 
-// Define type options for Rods
-$rodTypes = ['8mm', '10mm', '12mm', '16mm', '20mm'];
+// Fetch category units
+$unitSql = "SELECT cu.*, c.name as category_name 
+            FROM category_units cu 
+            JOIN categories c ON cu.category_id = c.id 
+            ORDER BY c.name, cu.unit";
+$unitResult = $conn->query($unitSql);
+if ($unitResult === false) {
+    $error = "Error fetching category units: " . $conn->error;
+}
 
-// Handle form submission for adding a purchase
-if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['add_purchase'])) {
-    $seller_id = (int)sanitizeInput($_POST['seller_id']);
-    $products_data = $_POST['products'];
-    $quantities = $_POST['quantities'];
-    $prices = $_POST['prices'];
-    $units = $_POST['units'];
-    $types = isset($_POST['types']) ? $_POST['types'] : [];
-    $paid_amount = floatval($_POST['paid_amount']);
-    $payment_method = sanitizeInput($_POST['payment_method']);
-    $purchase_date = sanitizeInput($_POST['purchase_date']);
+// Fetch purchase list
+$purchaseListSql = "SELECT ph.id, ph.seller_id, s.name as seller_name, ph.total, ph.paid, ph.due, ph.purchase_date, 
+                          pm.method as payment_method, ph.invoice_number, ph.created_at
+                    FROM purchase_headers ph
+                    JOIN sellers s ON ph.seller_id = s.id
+                    JOIN payment_methods pm ON ph.payment_method_id = pm.id
+                    ORDER BY ph.created_at DESC";
+$purchaseListResult = $conn->query($purchaseListSql);
+if ($purchaseListResult === false) {
+    $error = "Error fetching purchase list: " . $conn->error;
+}
 
-    // Validate inputs
+// Process form submission for new purchase
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && !isset($_POST['update_purchase'])) {
+    $seller_id = filter_input(INPUT_POST, 'seller_id', FILTER_VALIDATE_INT);
+    $purchase_date = filter_input(INPUT_POST, 'purchase_date');
+    $payment_method_id = filter_input(INPUT_POST, 'payment_method_id', FILTER_VALIDATE_INT);
     $total = 0;
-    $items = [];
-    for ($i = 0; $i < count($products_data); $i++) {
-        $product_id = (int)$products_data[$i];
-        $quantity = floatval($quantities[$i]);
-        $price = floatval($prices[$i]);
-        $unit = sanitizeInput($units[$i]);
-        $type = isset($types[$i]) ? sanitizeInput($types[$i]) : null;
-        $subtotal = $quantity * $price;
+    $paid = filter_input(INPUT_POST, 'paid', FILTER_VALIDATE_FLOAT);
+    $product_ids = $_POST['product_id'] ?? [];
+    $quantities = $_POST['quantity'] ?? [];
+    $prices = $_POST['price'] ?? [];
+    $units = $_POST['unit'] ?? [];
+    $types = $_POST['type'] ?? [];
 
-        if ($product_id <= 0 || $quantity <= 0 || $price <= 0 || empty($unit)) {
-            $error = "Invalid product, quantity, price, or unit.";
-            break;
-        }
-
-        $items[] = [
-            'product_id' => $product_id,
-            'quantity' => $quantity,
-            'price' => $price,
-            'unit' => $unit,
-            'type' => $type,
-            'subtotal' => $subtotal
-        ];
-        $total += $subtotal;
-    }
-
-    if (empty($items)) {
-        $error = "No valid products selected.";
-    }
-
-    if (!isset($error)) {
-        $due = $total - $paid_amount;
-        if ($due < 0) {
-            $error = "Paid amount cannot exceed total.";
-        } else {
-            // Generate invoice number (pass $conn)
-            $invoice_number = generateInvoiceNumber($conn);
-            if ($invoice_number === false) {
-                $error = "Failed to generate invoice number. Check the error log for details.";
-            } else {
-                // Debug: Log the values being passed to bind_param
-                error_log("Add Purchase - Values: seller_id=$seller_id, total=$total, paid_amount=$paid_amount, due=$due, purchase_date=$purchase_date, payment_method=$payment_method, invoice_number=$invoice_number");
-
-                // Begin transaction
-                $conn->begin_transaction();
-                try {
-                    // Insert into purchase_headers table (main purchase record)
-                    $purchaseSql = "INSERT INTO purchase_headers (seller_id, total, paid, due, purchase_date, payment_method, invoice_number, created_at) 
-                                    VALUES (?, ?, ?, ?, ?, ?, ?, NOW())";
-                    $stmt = $conn->prepare($purchaseSql);
-                    if ($stmt === false) {
-                        throw new Exception("Prepare failed (main purchase): " . $conn->error);
-                    }
-                    $stmt->bind_param("iddsdss", $seller_id, $total, $paid_amount, $due, $purchase_date, $payment_method, $invoice_number);
-                    if (!$stmt->execute()) {
-                        throw new Exception("Execute failed (main purchase): " . $stmt->error);
-                    }
-
-                    $purchase_id = $conn->insert_id;
-
-                    // Insert individual purchase items with product details
-                    foreach ($items as $item) {
-                        $product_id = $item['product_id'];
-                        $quantity = $item['quantity'];
-                        $price = $item['price'];
-                        $unit = $item['unit'];
-                        $type = $item['type'];
-
-                        // Update product quantity
-                        $updateSql = "UPDATE products SET quantity = quantity + ? WHERE id = ?";
-                        $updateStmt = $conn->prepare($updateSql);
-                        if ($updateStmt === false) {
-                            throw new Exception("Prepare failed (update product): " . $conn->error);
-                        }
-                        $updateStmt->bind_param("di", $quantity, $product_id);
-                        if (!$updateStmt->execute()) {
-                            throw new Exception("Execute failed (update product): " . $updateStmt->error);
-                        }
-
-                        // Insert into purchase_items
-                        $purchaseItemSql = "INSERT INTO purchase_items (purchase_id, product_id, quantity, price, total, unit, type, created_at) 
-                                            VALUES (?, ?, ?, ?, ?, ?, ?, NOW())";
-                        $purchaseItemStmt = $conn->prepare($purchaseItemSql);
-                        if ($purchaseItemStmt === false) {
-                            throw new Exception("Prepare failed (purchase item): " . $conn->error);
-                        }
-                        $itemTotal = $quantity * $price;
-                        $purchaseItemStmt->bind_param("iiddsss", $purchase_id, $product_id, $quantity, $price, $itemTotal, $unit, $type);
-                        if (!$purchaseItemStmt->execute()) {
-                            throw new Exception("Execute failed (purchase item): " . $purchaseItemStmt->error);
-                        }
-                    }
-
-                    $conn->commit();
-                    $message = "Purchase recorded successfully. Invoice Number: $invoice_number";
-                } catch (Exception $e) {
-                    $conn->rollback();
-                    $error = "Error recording purchase: " . $e->getMessage();
-                }
-            }
-        }
-    }
-}
-
-// Handle form submission for updating a purchase
-if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['update_purchase'])) {
-    $invoice_number = sanitizeInput($_POST['invoice_number']);
-    $seller_id = (int)sanitizeInput($_POST['seller_id']);
-    $products_data = $_POST['products'];
-    $quantities = $_POST['quantities'];
-    $prices = $_POST['prices'];
-    $units = $_POST['units'];
-    $types = isset($_POST['types']) ? $_POST['types'] : [];
-    $paid_amount = floatval($_POST['paid_amount']);
-    $payment_method = sanitizeInput($_POST['payment_method']);
-    $purchase_date = sanitizeInput($_POST['purchase_date']);
-
-    // Fetch the purchase_id from purchase_headers
-    $fetchSql = "SELECT id FROM purchase_headers WHERE invoice_number = ?";
-    $fetchStmt = $conn->prepare($fetchSql);
-    $fetchStmt->bind_param("s", $invoice_number);
-    $fetchStmt->execute();
-    $fetchResult = $fetchStmt->get_result();
-    if ($fetchResult->num_rows == 0) {
-        $error = "Purchase not found.";
+    if (!$seller_id || !$purchase_date || !$payment_method_id || empty($product_ids) || $paid === false) {
+        $error = "All fields are required, and paid amount must be a valid number.";
     } else {
-        $purchase_id = $fetchResult->fetch_assoc()['id'];
-
-        // Fetch existing items to revert stock
-        $itemsSql = "SELECT product_id, quantity FROM purchase_items WHERE purchase_id = ?";
-        $stmt = $conn->prepare($itemsSql);
-        if ($stmt === false) {
-            $error = "Prepare failed (fetch items): " . $conn->error;
+        // Validate purchase date format
+        $date = DateTime::createFromFormat('Y-m-d', $purchase_date);
+        if (!$date || $date->format('Y-m-d') !== $purchase_date) {
+            $error = "Invalid purchase date format.";
         } else {
-            $stmt->bind_param("i", $purchase_id);
-            $stmt->execute();
-            $itemsResult = $stmt->get_result();
-            $oldItems = [];
-            while ($item = $itemsResult->fetch_assoc()) {
-                $oldItems[] = $item;
-            }
-
-            // Validate inputs
-            $total = 0;
-            $newItems = [];
-            for ($i = 0; $i < count($products_data); $i++) {
-                $product_id = (int)$products_data[$i];
+            // Calculate total
+            for ($i = 0; $i < count($product_ids); $i++) {
                 $quantity = floatval($quantities[$i]);
                 $price = floatval($prices[$i]);
-                $unit = sanitizeInput($units[$i]);
-                $type = isset($types[$i]) ? sanitizeInput($types[$i]) : null;
-                $subtotal = $quantity * $price;
-
-                if ($product_id <= 0 || $quantity <= 0 || $price <= 0 || empty($unit)) {
-                    $error = "Invalid product, quantity, price, or unit.";
+                if ($quantity <= 0 || $price < 0) {
+                    $error = "Quantity must be greater than 0, and price must be non-negative.";
                     break;
                 }
-
-                $newItems[] = [
-                    'product_id' => $product_id,
-                    'quantity' => $quantity,
-                    'price' => $price,
-                    'unit' => $unit,
-                    'type' => $type,
-                    'subtotal' => $subtotal
-                ];
-                $total += $subtotal;
-            }
-
-            if (empty($newItems)) {
-                $error = "No valid products selected.";
+                $total += $quantity * $price;
             }
 
             if (!isset($error)) {
-                $due = $total - $paid_amount;
+                $due = $total - $paid;
                 if ($due < 0) {
-                    $error = "Paid amount cannot exceed total.";
+                    $error = "Paid amount cannot be greater than total.";
                 } else {
-                    // Debug: Log the values being passed to bind_param
-                    error_log("Update Purchase - Values: seller_id=$seller_id, total=$total, paid_amount=$paid_amount, due=$due, purchase_date=$purchase_date, payment_method=$payment_method, invoice_number=$invoice_number");
+                    // Generate invoice number
+                    $datePart = date('Ymd', strtotime($purchase_date));
+                    $invoiceSql = "SELECT COUNT(*) as count FROM purchase_headers WHERE invoice_number LIKE 'PUR-$datePart%'";
+                    $invoiceResult = $conn->query($invoiceSql);
+                    $count = $invoiceResult->fetch_assoc()['count'] + 1;
+                    $invoice_number = "PUR-$datePart" . str_pad($count, 3, '0', STR_PAD_LEFT);
 
                     // Begin transaction
                     $conn->begin_transaction();
                     try {
-                        // Revert stock for old items
-                        foreach ($oldItems as $item) {
-                            $product_id = $item['product_id'];
-                            $quantity = $item['quantity'];
-                            $updateSql = "UPDATE products SET quantity = quantity - ? WHERE id = ?";
-                            $updateStmt = $conn->prepare($updateSql);
-                            if ($updateStmt === false) {
-                                throw new Exception("Prepare failed (revert stock): " . $conn->error);
-                            }
-                            $updateStmt->bind_param("di", $quantity, $product_id);
-                            if (!$updateStmt->execute()) {
-                                throw new Exception("Execute failed (revert stock): " . $updateStmt->error);
+                        // Insert into purchase_headers
+                        $purchaseSql = "INSERT INTO purchase_headers (seller_id, total, paid, due, purchase_date, payment_method_id, invoice_number) 
+                                        VALUES (?, ?, ?, ?, ?, ?, ?)";
+                        $purchaseStmt = $conn->prepare($purchaseSql);
+                        $purchaseStmt->bind_param("idddsis", $seller_id, $total, $paid, $due, $purchase_date, $payment_method_id, $invoice_number);
+                        if (!$purchaseStmt->execute()) {
+                            throw new Exception("Error recording purchase: " . $purchaseStmt->error);
+                        }
+
+                        $purchase_id = $conn->insert_id;
+
+                        // Insert purchase items
+                        $purchaseItemSql = "INSERT INTO purchase_items (purchase_id, product_id, quantity, price, total, unit, type) 
+                                            VALUES (?, ?, ?, ?, ?, ?, ?)";
+                        $purchaseItemStmt = $conn->prepare($purchaseItemSql);
+                        for ($i = 0; $i < count($product_ids); $i++) {
+                            $product_id = intval($product_ids[$i]);
+                            $quantity = floatval($quantities[$i]);
+                            $price = floatval($prices[$i]);
+                            $itemTotal = $quantity * $price;
+                            $unit = $units[$i];
+                            $type = ($types[$i] !== '') ? $types[$i] : null;
+
+                            $purchaseItemStmt->bind_param("iiddsss", $purchase_id, $product_id, $quantity, $price, $itemTotal, $unit, $type);
+                            if (!$purchaseItemStmt->execute()) {
+                                throw new Exception("Error recording purchase item: " . $purchaseItemStmt->error);
                             }
                         }
 
-                        // Delete old purchase items
-                        $deleteSql = "DELETE FROM purchase_items WHERE purchase_id = ?";
-                        $deleteStmt = $conn->prepare($deleteSql);
-                        if ($deleteStmt === false) {
-                            throw new Exception("Prepare failed (delete items): " . $conn->error);
-                        }
-                        $deleteStmt->bind_param("i", $purchase_id);
-                        if (!$deleteStmt->execute()) {
-                            throw new Exception("Execute failed (delete items): " . $deleteStmt->error);
+                        // Insert into purchases table for legacy compatibility (using payment_method_id)
+                        $legacyPurchaseSql = "INSERT INTO purchases (seller_id, product_id, quantity, price, total, paid, due, purchase_date, payment_method_id, invoice_number, unit, type) 
+                                              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                        $legacyStmt = $conn->prepare($legacyPurchaseSql);
+
+                        // First, insert the main purchase record (product_id NULL)
+                        $nullProductId = null;
+                        $nullQuantity = null;
+                        $nullPrice = null;
+                        $nullUnit = null;
+                        $nullType = null;
+                        $legacyStmt->bind_param("iiddsddsisss", $seller_id, $nullProductId, $nullQuantity, $nullPrice, $total, $paid, $due, $purchase_date, $payment_method_id, $invoice_number, $nullUnit, $nullType);
+                        if (!$legacyStmt->execute()) {
+                            throw new Exception("Error recording legacy purchase: " . $legacyStmt->error);
                         }
 
-                        // Update main purchase record in purchase_headers
-                        $updatePurchaseSql = "UPDATE purchase_headers SET seller_id = ?, total = ?, paid = ?, due = ?, purchase_date = ?, payment_method = ? WHERE invoice_number = ?";
-                        $updateStmt = $conn->prepare($updatePurchaseSql);
-                        if ($updateStmt === false) {
-                            throw new Exception("Prepare failed (update purchase): " . $conn->error);
+                        // Then insert each purchase item
+                        for ($i = 0; $i < count($product_ids); $i++) {
+                            $product_id = intval($product_ids[$i]);
+                            $quantity = floatval($quantities[$i]);
+                            $price = floatval($prices[$i]);
+                            $itemTotal = $quantity * $price;
+                            $unit = $units[$i];
+                            $type = ($types[$i] !== '') ? $types[$i] : null;
+
+                            $legacyStmt->bind_param("iiddsddsisss", $seller_id, $product_id, $quantity, $price, $itemTotal, $paid, $due, $purchase_date, $payment_method_id, $invoice_number, $unit, $type);
+                            if (!$legacyStmt->execute()) {
+                                throw new Exception("Error recording legacy purchase item: " . $legacyStmt->error);
+                            }
                         }
-                        $updateStmt->bind_param("iddsdss", $seller_id, $total, $paid_amount, $due, $purchase_date, $payment_method, $invoice_number);
+
+                        // Commit transaction
+                        $conn->commit();
+                        $success = "Purchase recorded successfully. Invoice Number: $invoice_number";
+                        // Refresh purchase list
+                        $purchaseListResult = $conn->query($purchaseListSql);
+                    } catch (Exception $e) {
+                        $conn->rollback();
+                        $error = $e->getMessage();
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Process delete request
+if (isset($_GET['delete_id'])) {
+    $delete_id = filter_input(INPUT_GET, 'delete_id', FILTER_VALIDATE_INT);
+    if ($delete_id) {
+        $conn->begin_transaction();
+        try {
+            // Fetch the invoice number to delete from legacy table
+            $invoiceSql = "SELECT invoice_number FROM purchase_headers WHERE id = ?";
+            $invoiceStmt = $conn->prepare($invoiceSql);
+            $invoiceStmt->bind_param("i", $delete_id);
+            $invoiceStmt->execute();
+            $invoiceResult = $invoiceStmt->get_result();
+            if ($invoiceResult->num_rows > 0) {
+                $invoice_number = $invoiceResult->fetch_assoc()['invoice_number'];
+
+                // Delete from purchase_headers (will cascade to purchase_items due to ON DELETE CASCADE)
+                $deleteSql = "DELETE FROM purchase_headers WHERE id = ?";
+                $deleteStmt = $conn->prepare($deleteSql);
+                $deleteStmt->bind_param("i", $delete_id);
+                if (!$deleteStmt->execute()) {
+                    throw new Exception("Error deleting purchase: " . $deleteStmt->error);
+                }
+
+                // Delete from purchases (legacy table) for the same invoice
+                $deleteLegacySql = "DELETE FROM purchases WHERE invoice_number = ?";
+                $deleteLegacyStmt = $conn->prepare($deleteLegacySql);
+                $deleteLegacyStmt->bind_param("s", $invoice_number);
+                if (!$deleteLegacyStmt->execute()) {
+                    throw new Exception("Error deleting legacy purchase: " . $deleteLegacyStmt->error);
+                }
+            } else {
+                throw new Exception("Purchase not found.");
+            }
+
+            $conn->commit();
+            $success = "Purchase deleted successfully.";
+            // Refresh purchase list
+            $purchaseListResult = $conn->query($purchaseListSql);
+        } catch (Exception $e) {
+            $conn->rollback();
+            $error = $e->getMessage();
+        }
+    }
+}
+
+// Process update request
+if ($_SERVER['REQUEST_METHOD'] === 'POST' && isset($_POST['update_purchase'])) {
+    $purchase_id = filter_input(INPUT_POST, 'purchase_id', FILTER_VALIDATE_INT);
+    $seller_id = filter_input(INPUT_POST, 'seller_id', FILTER_VALIDATE_INT);
+    $purchase_date = filter_input(INPUT_POST, 'purchase_date');
+    $payment_method_id = filter_input(INPUT_POST, 'payment_method_id', FILTER_VALIDATE_INT);
+    $total = 0;
+    $paid = filter_input(INPUT_POST, 'paid', FILTER_VALIDATE_FLOAT);
+    $product_ids = $_POST['product_id'] ?? [];
+    $quantities = $_POST['quantity'] ?? [];
+    $prices = $_POST['price'] ?? [];
+    $units = $_POST['unit'] ?? [];
+    $types = $_POST['type'] ?? [];
+
+    if (!$purchase_id || !$seller_id || !$purchase_date || !$payment_method_id || empty($product_ids) || $paid === false) {
+        $error = "All fields are required, and paid amount must be a valid number.";
+    } else {
+        $date = DateTime::createFromFormat('Y-m-d', $purchase_date);
+        if (!$date || $date->format('Y-m-d') !== $purchase_date) {
+            $error = "Invalid purchase date format.";
+        } else {
+            for ($i = 0; $i < count($product_ids); $i++) {
+                $quantity = floatval($quantities[$i]);
+                $price = floatval($prices[$i]);
+                if ($quantity <= 0 || $price < 0) {
+                    $error = "Quantity must be greater than 0, and price must be non-negative.";
+                    break;
+                }
+                $total += $quantity * $price;
+            }
+
+            if (!isset($error)) {
+                $due = $total - $paid;
+                if ($due < 0) {
+                    $error = "Paid amount cannot be greater than total.";
+                } else {
+                    $conn->begin_transaction();
+                    try {
+                        // Fetch the invoice number to update legacy table
+                        $invoiceSql = "SELECT invoice_number FROM purchase_headers WHERE id = ?";
+                        $invoiceStmt = $conn->prepare($invoiceSql);
+                        $invoiceStmt->bind_param("i", $purchase_id);
+                        $invoiceStmt->execute();
+                        $invoiceResult = $invoiceStmt->get_result();
+                        $invoice_number = $invoiceResult->fetch_assoc()['invoice_number'];
+
+                        // Update purchase_headers
+                        $updateSql = "UPDATE purchase_headers 
+                                      SET seller_id = ?, total = ?, paid = ?, due = ?, purchase_date = ?, payment_method_id = ?
+                                      WHERE id = ?";
+                        $updateStmt = $conn->prepare($updateSql);
+                        $updateStmt->bind_param("idddsis", $seller_id, $total, $paid, $due, $purchase_date, $payment_method_id, $purchase_id);
                         if (!$updateStmt->execute()) {
-                            throw new Exception("Execute failed (update purchase): " . $updateStmt->error);
+                            throw new Exception("Error updating purchase: " . $updateStmt->error);
+                        }
+
+                        // Delete existing purchase items (triggers will adjust product quantities)
+                        $deleteItemsSql = "DELETE FROM purchase_items WHERE purchase_id = ?";
+                        $deleteItemsStmt = $conn->prepare($deleteItemsSql);
+                        $deleteItemsStmt->bind_param("i", $purchase_id);
+                        if (!$deleteItemsStmt->execute()) {
+                            throw new Exception("Error deleting existing purchase items: " . $deleteItemsStmt->error);
                         }
 
                         // Insert new purchase items
-                        foreach ($newItems as $item) {
-                            $product_id = $item['product_id'];
-                            $quantity = $item['quantity'];
-                            $price = $item['price'];
-                            $unit = $item['unit'];
-                            $type = $item['type'];
-
-                            // Update product quantity
-                            $updateSql = "UPDATE products SET quantity = quantity + ? WHERE id = ?";
-                            $updateStmt = $conn->prepare($updateSql);
-                            if ($updateStmt === false) {
-                                throw new Exception("Prepare failed (update stock): " . $conn->error);
-                            }
-                            $updateStmt->bind_param("di", $quantity, $product_id);
-                            if (!$updateStmt->execute()) {
-                                throw new Exception("Execute failed (update stock): " . $updateStmt->error);
-                            }
-
-                            // Insert new purchase item
-                            $purchaseItemSql = "INSERT INTO purchase_items (purchase_id, product_id, quantity, price, total, unit, type, created_at) 
-                                                VALUES (?, ?, ?, ?, ?, ?, ?, NOW())";
-                            $purchaseItemStmt = $conn->prepare($purchaseItemSql);
-                            if ($purchaseItemStmt === false) {
-                                throw new Exception("Prepare failed (insert item): " . $conn->error);
-                            }
+                        $purchaseItemSql = "INSERT INTO purchase_items (purchase_id, product_id, quantity, price, total, unit, type) 
+                                            VALUES (?, ?, ?, ?, ?, ?, ?)";
+                        $purchaseItemStmt = $conn->prepare($purchaseItemSql);
+                        for ($i = 0; $i < count($product_ids); $i++) {
+                            $product_id = intval($product_ids[$i]);
+                            $quantity = floatval($quantities[$i]);
+                            $price = floatval($prices[$i]);
                             $itemTotal = $quantity * $price;
+                            $unit = $units[$i];
+                            $type = ($types[$i] !== '') ? $types[$i] : null;
+
                             $purchaseItemStmt->bind_param("iiddsss", $purchase_id, $product_id, $quantity, $price, $itemTotal, $unit, $type);
                             if (!$purchaseItemStmt->execute()) {
-                                throw new Exception("Execute failed (insert item): " . $purchaseItemStmt->error);
+                                throw new Exception("Error recording updated purchase item: " . $purchaseItemStmt->error);
+                            }
+                        }
+
+                        // Update purchases table (legacy)
+                        // First, delete existing entries for this invoice
+                        $deleteLegacySql = "DELETE FROM purchases WHERE invoice_number = ?";
+                        $deleteLegacyStmt = $conn->prepare($deleteLegacySql);
+                        $deleteLegacyStmt->bind_param("s", $invoice_number);
+                        if (!$deleteLegacyStmt->execute()) {
+                            throw new Exception("Error deleting legacy purchase entries: " . $deleteLegacyStmt->error);
+                        }
+
+                        // Re-insert into purchases table
+                        $legacyPurchaseSql = "INSERT INTO purchases (seller_id, product_id, quantity, price, total, paid, due, purchase_date, payment_method_id, invoice_number, unit, type) 
+                                              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)";
+                        $legacyStmt = $conn->prepare($legacyPurchaseSql);
+
+                        // Insert main purchase record
+                        $nullProductId = null;
+                        $nullQuantity = null;
+                        $nullPrice = null;
+                        $nullUnit = null;
+                        $nullType = null;
+                        $legacyStmt->bind_param("iiddsddsisss", $seller_id, $nullProductId, $nullQuantity, $nullPrice, $total, $paid, $due, $purchase_date, $payment_method_id, $invoice_number, $nullUnit, $nullType);
+                        if (!$legacyStmt->execute()) {
+                            throw new Exception("Error updating legacy purchase: " . $legacyStmt->error);
+                        }
+
+                        // Insert purchase items
+                        for ($i = 0; $i < count($product_ids); $i++) {
+                            $product_id = intval($product_ids[$i]);
+                            $quantity = floatval($quantities[$i]);
+                            $price = floatval($prices[$i]);
+                            $itemTotal = $quantity * $price;
+                            $unit = $units[$i];
+                            $type = ($types[$i] !== '') ? $types[$i] : null;
+
+                            $legacyStmt->bind_param("iiddsddsisss", $seller_id, $product_id, $quantity, $price, $itemTotal, $paid, $due, $purchase_date, $payment_method_id, $invoice_number, $unit, $type);
+                            if (!$legacyStmt->execute()) {
+                                throw new Exception("Error updating legacy purchase item: " . $legacyStmt->error);
                             }
                         }
 
                         $conn->commit();
-                        $message = "Purchase updated successfully.";
+                        $success = "Purchase updated successfully.";
+                        $purchaseListResult = $conn->query($purchaseListSql);
                     } catch (Exception $e) {
                         $conn->rollback();
-                        $error = "Error updating purchase: " . $e->getMessage();
+                        $error = $e->getMessage();
                     }
                 }
             }
@@ -380,888 +370,515 @@ if ($_SERVER["REQUEST_METHOD"] == "POST" && isset($_POST['update_purchase'])) {
     }
 }
 
-// Handle delete purchase
-if (isset($_GET['action']) && $_GET['action'] === 'delete' && isset($_GET['invoice_number'])) {
-    $invoice_number = sanitizeInput($_GET['invoice_number']);
-    
-    // Begin transaction
-    $conn->begin_transaction();
-    try {
-        // Fetch the purchase_id from purchase_headers
-        $fetchSql = "SELECT id FROM purchase_headers WHERE invoice_number = ?";
-        $fetchStmt = $conn->prepare($fetchSql);
-        $fetchStmt->bind_param("s", $invoice_number);
-        $fetchStmt->execute();
-        $fetchResult = $fetchStmt->get_result();
-        if ($fetchResult->num_rows == 0) {
-            throw new Exception("Purchase not found.");
-        }
-        $purchase_id = $fetchResult->fetch_assoc()['id'];
+// Fetch purchase details for editing if edit_id is set
+$editPurchase = null;
+if (isset($_GET['edit_id'])) {
+    $edit_id = filter_input(INPUT_GET, 'edit_id', FILTER_VALIDATE_INT);
+    if ($edit_id) {
+        $editSql = "SELECT * FROM purchase_headers WHERE id = ?";
+        $editStmt = $conn->prepare($editSql);
+        $editStmt->bind_param("i", $edit_id);
+        $editStmt->execute();
+        $editResult = $editStmt->get_result();
+        if ($editResult->num_rows > 0) {
+            $editPurchase = $editResult->fetch_assoc();
 
-        // Fetch items to revert stock
-        $itemsSql = "SELECT product_id, quantity FROM purchase_items WHERE purchase_id = ?";
-        $stmt = $conn->prepare($itemsSql);
-        if ($stmt === false) {
-            throw new Exception("Prepare failed (fetch items for delete): " . $conn->error);
-        }
-        $stmt->bind_param("i", $purchase_id);
-        if (!$stmt->execute()) {
-            throw new Exception("Execute failed (fetch items for delete): " . $stmt->error);
-        }
-        $itemsResult = $stmt->get_result();
-
-        while ($item = $itemsResult->fetch_assoc()) {
-            $product_id = $item['product_id'];
-            $quantity = $item['quantity'];
-            // Revert product quantity
-            $updateSql = "UPDATE products SET quantity = quantity - ? WHERE id = ?";
-            $updateStmt = $conn->prepare($updateSql);
-            if ($updateStmt === false) {
-                throw new Exception("Prepare failed (revert stock for delete): " . $conn->error);
-            }
-            $updateStmt->bind_param("di", $quantity, $product_id);
-            if (!$updateStmt->execute()) {
-                throw new Exception("Execute failed (revert stock for delete): " . $updateStmt->error);
-            }
-        }
-
-        // Delete the purchase (this will cascade to purchase_items due to ON DELETE CASCADE)
-        $deleteSql = "DELETE FROM purchase_headers WHERE invoice_number = ?";
-        $deleteStmt = $conn->prepare($deleteSql);
-        if ($deleteStmt === false) {
-            throw new Exception("Prepare failed (delete purchase): " . $conn->error);
-        }
-        $deleteStmt->bind_param("s", $invoice_number);
-        if (!$deleteStmt->execute()) {
-            throw new Exception("Execute failed (delete purchase): " . $deleteStmt->error);
-        }
-
-        $conn->commit();
-        $message = "Purchase deleted successfully.";
-    } catch (Exception $e) {
-        $conn->rollback();
-        $error = "Error deleting purchase: " . $e->getMessage();
-    }
-    // Redirect to avoid resubmission
-    header("Location: buy.php");
-    exit();
-}
-
-// Check if we need to display an invoice
-$showInvoice = false;
-$invoiceData = null;
-if (isset($_GET['view_invoice']) && !empty($_GET['view_invoice'])) {
-    $showInvoice = true;
-    $invoice_number = sanitizeInput($_GET['view_invoice']);
-
-    // Fetch purchase details for the invoice
-    $purchaseSql = "SELECT ph.*, s.name as seller_name, s.phone as seller_phone, s.address as seller_address 
-                    FROM purchase_headers ph 
-                    LEFT JOIN sellers s ON ph.seller_id = s.id 
-                    WHERE ph.invoice_number = ?";
-    $stmt = $conn->prepare($purchaseSql);
-    if ($stmt === false) {
-        $error = "Prepare failed: " . $conn->error;
-    } else {
-        $stmt->bind_param("s", $invoice_number);
-        $stmt->execute();
-        $purchaseResult = $stmt->get_result();
-
-        if ($purchaseResult->num_rows === 0) {
-            $error = "Purchase not found for invoice number: " . htmlspecialchars($invoice_number);
-        } else {
-            $invoiceData = $purchaseResult->fetch_assoc();
-            $purchase_id = $invoiceData['id'];
-
-            // Fetch purchase items
-            $itemsSql = "SELECT pi.*, p.name as product_name, p.brand_name, p.type as product_type 
-                         FROM purchase_items pi 
-                         LEFT JOIN products p ON pi.product_id = p.id 
+            $itemsSql = "SELECT pi.*, p.name as product_name, p.category_id, c.name as category_name, p.brand_name, p.unit as default_unit, p.price as default_price
+                         FROM purchase_items pi
+                         JOIN products p ON pi.product_id = p.id
+                         JOIN categories c ON p.category_id = c.id
                          WHERE pi.purchase_id = ?";
-            $stmt = $conn->prepare($itemsSql);
-            if ($stmt === false) {
-                $error = "Prepare failed: " . $conn->error;
-            } else {
-                $stmt->bind_param("i", $purchase_id);
-                $stmt->execute();
-                $itemsResult = $stmt->get_result();
-                $invoiceData['items'] = [];
-                while ($item = $itemsResult->fetch_assoc()) {
-                    $invoiceData['items'][] = $item;
-                }
-            }
+            $itemsStmt = $conn->prepare($itemsSql);
+            $itemsStmt->bind_param("i", $edit_id);
+            $itemsStmt->execute();
+            $editPurchase['items'] = $itemsStmt->get_result()->fetch_all(MYSQLI_ASSOC);
         }
-    }
-}
-
-// Fetch purchase history for display (only main purchase records)
-if (!$showInvoice) {
-    $purchaseSql = "SELECT ph.*, s.name as seller_name 
-                    FROM purchase_headers ph 
-                    LEFT JOIN sellers s ON ph.seller_id = s.id 
-                    ORDER BY ph.created_at DESC";
-    $purchaseResult = $conn->query($purchaseSql);
-
-    // Check if the query was successful
-    if ($purchaseResult === false) {
-        $error = "Error fetching purchase history: " . $conn->error;
-        error_log("Purchase history query failed in buy.php: " . $conn->error);
     }
 }
 ?>
 
-<!-- Include html2pdf.js for PDF download -->
-<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+<h2>Buy Products</h2>
 
-<?php if ($showInvoice && isset($invoiceData)): ?>
-    <div class="invoice-container" id="invoice">
-        <div class="invoice-header">
-            <h1>Invoice</h1>
-            <div class="shop-details">
-                <h2><?php echo htmlspecialchars($shopDetails['shop_name']); ?></h2>
-                <p><?php echo htmlspecialchars($shopDetails['address']); ?></p>
-                <p><strong>Phone:</strong> <?php echo htmlspecialchars($shopDetails['phone']); ?></p>
-                <p><strong>Email:</strong> <?php echo htmlspecialchars($shopDetails['email']); ?></p>
-            </div>
-            <div class="invoice-meta">
-                <p><strong>Invoice Number:</strong> <?php echo htmlspecialchars($invoiceData['invoice_number']); ?></p>
-                <p><strong>Date:</strong> <?php echo htmlspecialchars($invoiceData['purchase_date']); ?></p>
-            </div>
-        </div>
+<?php if (isset($error)) { ?>
+    <p class="error"><?php echo htmlspecialchars($error); ?></p>
+<?php } ?>
 
-        <div class="seller-info">
-            <h3>Seller Information</h3>
-            <p><strong>Name:</strong> <?php echo htmlspecialchars($invoiceData['seller_name'] ?? 'N/A'); ?></p>
-            <p><strong>Phone:</strong> <?php echo htmlspecialchars($invoiceData['seller_phone'] ?? 'N/A'); ?></p>
-            <p><strong>Address:</strong> <?php echo htmlspecialchars($invoiceData['seller_address'] ?? 'N/A'); ?></p>
-        </div>
+<?php if (isset($success)) { ?>
+    <p class="success"><?php echo htmlspecialchars($success); ?></p>
+<?php } ?>
 
-        <h3>Items</h3>
-        <table class="invoice-table">
-            <thead>
-                <tr>
-                    <th>Product</th>
-                    <th>Quantity</th>
-                    <th>Unit</th>
-                    <th>Type</th>
-                    <th>Price</th>
-                    <th>Subtotal</th>
-                </tr>
-            </thead>
-            <tbody>
-                <?php foreach ($invoiceData['items'] as $item): ?>
-                    <tr>
-                        <td><?php echo htmlspecialchars($item['product_name'] . " (" . $item['brand_name'] . ")"); ?></td>
-                        <td><?php echo number_format($item['quantity'], 2); ?></td>
-                        <td><?php echo htmlspecialchars($item['unit']); ?></td>
-                        <td><?php echo htmlspecialchars($item['type'] ?: 'N/A'); ?></td>
-                        <td><?php echo number_format($item['price'], 2); ?></td>
-                        <td><?php echo number_format($item['quantity'] * $item['price'], 2); ?></td>
-                    </tr>
-                <?php endforeach; ?>
-            </tbody>
-        </table>
-
-        <div class="invoice-summary">
-            <p><strong>Total:</strong> <?php echo number_format($invoiceData['total'], 2); ?></p>
-            <p><strong>Paid:</strong> <?php echo number_format($invoiceData['paid'], 2); ?></p>
-            <p><strong>Due:</strong> <?php echo number_format($invoiceData['due'], 2); ?></p>
-        </div>
-
-        <div class="invoice-actions">
-            <button onclick="printInvoice()" class="print-btn">Print Invoice</button>
-            <button onclick="downloadInvoice('<?php echo htmlspecialchars($invoiceData['invoice_number']); ?>')" class="download-btn">Download PDF</button>
-            <a href="buy.php"><button class="back-btn">Back to Purchase List</button></a>
-        </div>
-    </div>
-
-<?php else: ?>
-
-    <h2>Shop Details</h2>
-    <?php if (isset($message)) {
-        echo "<p class='success'>" . htmlspecialchars($message) . "</p>";
-    } ?>
-    <?php if (isset($error)) {
-        echo "<p class='error'>" . htmlspecialchars($error) . "</p>";
-    } ?>
-    <form method="post" class="shop-details-form">
-        <label for="shop_name">Shop Name:</label>
-        <input type="text" name="shop_name" id="shop_name" value="<?php echo htmlspecialchars($shopDetails['shop_name']); ?>" required>
-        
-        <label for="address">Address:</label>
-        <textarea name="address" id="address" required><?php echo htmlspecialchars($shopDetails['address']); ?></textarea>
-        
-        <label for="phone">Phone:</label>
-        <input type="text" name="phone" id="phone" value="<?php echo htmlspecialchars($shopDetails['phone']); ?>" required>
-        
-        <label for="email">Email:</label>
-        <input type="email" name="email" id="email" value="<?php echo htmlspecialchars($shopDetails['email']); ?>" required>
-        
-        <button type="submit" name="update_shop_details">Update Shop Details</button>
-    </form>
-
-    <h2>Add Purchase</h2>
-
-    <form method="post" id="purchaseForm">
-        <label for="seller_id">Select Seller:</label>
+<!-- Form for adding/updating purchases -->
+<h3><?php echo isset($editPurchase) ? 'Update Purchase' : 'Add New Purchase'; ?></h3>
+<form method="POST" action="">
+    <?php if (isset($editPurchase)) { ?>
+        <input type="hidden" name="update_purchase" value="1">
+        <input type="hidden" name="purchase_id" value="<?php echo $editPurchase['id']; ?>">
+    <?php } ?>
+    <div class="form-group">
+        <label for="seller_id">Select Seller</label>
         <select name="seller_id" id="seller_id" required>
             <option value="">Select Seller</option>
             <?php
-            if (isset($sellerResult) && $sellerResult !== false && $sellerResult->num_rows > 0) {
-                while ($sellerRow = $sellerResult->fetch_assoc()) {
-                    echo "<option value='" . $sellerRow['id'] . "'>" . htmlspecialchars($sellerRow['name']) . "</option>";
+            if ($sellerResult && $sellerResult->num_rows > 0) {
+                $sellerResult->data_seek(0);
+                while ($seller = $sellerResult->fetch_assoc()) {
+                    $selected = (isset($editPurchase) && $editPurchase['seller_id'] == $seller['id']) ? 'selected' : '';
+                    echo "<option value='{$seller['id']}' $selected>" . htmlspecialchars($seller['name']) . "</option>";
                 }
+            } else {
+                echo "<option value='' disabled>No sellers available</option>";
             }
             ?>
-        </select><br>
+        </select>
+    </div>
 
-        <label for="category_id">Select Category:</label>
-        <select name="category_id" id="category_id" onchange="filterProducts()">
-            <option value="">Select Category</option>
-            <?php
-            if (isset($categoryResult) && $categoryResult !== false && $categoryResult->num_rows > 0) {
-                while ($categoryRow = $categoryResult->fetch_assoc()) {
-                    echo "<option value='" . $categoryRow['id'] . "'>" . htmlspecialchars($categoryRow['name']) . "</option>";
-                }
+    <div class="form-group">
+        <label for="purchase_date">Purchase Date</label>
+        <input type="date" name="purchase_date" id="purchase_date" value="<?php echo isset($editPurchase) ? $editPurchase['purchase_date'] : date('Y-m-d'); ?>" required>
+    </div>
+
+    <div id="product-items">
+        <?php
+        if (isset($editPurchase) && !empty($editPurchase['items'])) {
+            $index = 0;
+            foreach ($editPurchase['items'] as $item) {
+        ?>
+                <div class="product-item">
+                    <h4>Product <?php echo $index + 1; ?></h4>
+                    <div class="form-group">
+                        <label for="product_id_<?php echo $index; ?>">Select Product</label>
+                        <select name="product_id[]" id="product_id_<?php echo $index; ?>" class="product-select" required onchange="updateProductDetails(<?php echo $index; ?>)">
+                            <option value="">Select Product</option>
+                            <?php
+                            $productResult->data_seek(0);
+                            while ($product = $productResult->fetch_assoc()) {
+                                $displayText = htmlspecialchars("{$product['name']} ({$product['category_name']}) - {$product['brand_name']} - {$product['unit']} - Price: {$product['price']} - Stock: {$product['quantity']}");
+                                $dataCategory = htmlspecialchars($product['category_name']);
+                                $dataUnit = htmlspecialchars($product['unit']);
+                                $dataPrice = $product['price'];
+                                $selected = ($item['product_id'] == $product['id']) ? 'selected' : '';
+                                echo "<option value='{$product['id']}' data-category='$dataCategory' data-unit='$dataUnit' data-price='$dataPrice' $selected>$displayText</option>";
+                            }
+                            ?>
+                        </select>
+                    </div>
+                    <div class="form-group">
+                        <label for="quantity_<?php echo $index; ?>">Quantity</label>
+                        <input type="number" name="quantity[]" id="quantity_<?php echo $index; ?>" step="0.01" min="0.01" value="<?php echo $item['quantity']; ?>" required oninput="calculateTotal(<?php echo $index; ?>)">
+                    </div>
+                    <div class="form-group">
+                        <label for="price_<?php echo $index; ?>">Price</label>
+                        <input type="number" name="price[]" id="price_<?php echo $index; ?>" step="0.01" min="0" value="<?php echo $item['price']; ?>" required oninput="calculateTotal(<?php echo $index; ?>)">
+                    </div>
+                    <div class="form-group">
+                        <label for="total_<?php echo $index; ?>">Total</label>
+                        <input type="number" id="total_<?php echo $index; ?>" step="0.01" value="<?php echo $item['total']; ?>" readonly>
+                    </div>
+                    <div class="form-group">
+                        <label for="unit_<?php echo $index; ?>">Unit</label>
+                        <select name="unit[]" id="unit_<?php echo $index; ?>" required>
+                            <option value="">Select Unit</option>
+                            <?php
+                            $unitResult->data_seek(0);
+                            while ($unit = $unitResult->fetch_assoc()) {
+                                if ($unit['category_name'] == $item['category_name']) {
+                                    $selected = ($unit['unit'] == $item['unit']) ? 'selected' : '';
+                                    echo "<option value='{$unit['unit']}' $selected>" . htmlspecialchars($unit['unit']) . "</option>";
+                                }
+                            }
+                            ?>
+                        </select>
+                    </div>
+                    <div class="form-group type-group" style="display: <?php echo ($item['category_name'] == 'Rod') ? 'block' : 'none'; ?>;">
+                        <label for="type_<?php echo $index; ?>">Type (Rod Only)</label>
+                        <select name="type[]" id="type_<?php echo $index; ?>">
+                            <option value="">Select Type</option>
+                            <?php
+                            $rodTypeResult->data_seek(0);
+                            while ($rodType = $rodTypeResult->fetch_assoc()) {
+                                $selected = ($item['type'] == $rodType['type']) ? 'selected' : '';
+                                echo "<option value='{$rodType['type']}' $selected>" . htmlspecialchars($rodType['type']) . "</option>";
+                            }
+                            ?>
+                        </select>
+                    </div>
+                    <?php if ($index > 0) { ?>
+                        <button type="button" onclick="removeProductItem(this)">Remove</button>
+                    <?php } ?>
+                </div>
+        <?php
+                $index++;
             }
-            ?>
-        </select><br>
-
-        <h3>Select Product:</h3>
-        <div id="product-list">
-            <div class="product-row">
-                <select name="products[]" class="product-select" onchange="updateProductDetails(this)" required>
-                    <option value="">Select Product</option>
-                    <?php
-                    if (!empty($products)) {
-                        foreach ($products as $product) {
-                            $displayText = htmlspecialchars($product['name'] . " (" . $product['brand_name'] . ", " . ($product['type'] ?: 'N/A') . ") - Stock: " . $product['quantity']);
-                            echo "<option value='" . $product['id'] . "' data-price='" . $product['price'] . "' data-category='" . htmlspecialchars($product['category_name']) . "' data-category-id='" . $product['category_id'] . "'>" . $displayText . "</option>";
-                        }
-                    }
-                    ?>
-                </select>
-                <input type="number" name="quantities[]" placeholder="Quantity" step="0.01" min="0" oninput="updateSubtotal(this)" required>
-                <input type="number" name="prices[]" placeholder="Price" step="0.01" min="0" oninput="updateSubtotal(this)" required>
-                <select name="units[]" class="unit-select" required>
-                    <option value="">Select Unit</option>
-                </select>
-                <div class="type-container" style="display: none;">
-                    <select name="types[]" class="type-select">
-                        <option value="">Select Type</option>
+        } else {
+        ?>
+            <div class="product-item">
+                <h4>Product 1</h4>
+                <div class="form-group">
+                    <label for="product_id_0">Select Product</label>
+                    <select name="product_id[]" id="product_id_0" class="product-select" required onchange="updateProductDetails(0)">
+                        <option value="">Select Product</option>
                         <?php
-                        foreach ($rodTypes as $type) {
-                            echo "<option value='" . htmlspecialchars($type) . "'>" . htmlspecialchars($type) . "</option>";
+                        if ($productResult && $productResult->num_rows > 0) {
+                            $productResult->data_seek(0);
+                            while ($product = $productResult->fetch_assoc()) {
+                                $displayText = htmlspecialchars("{$product['name']} ({$product['category_name']}) - {$product['brand_name']} - {$product['unit']} - Price: {$product['price']} - Stock: {$product['quantity']}");
+                                $dataCategory = htmlspecialchars($product['category_name']);
+                                $dataUnit = htmlspecialchars($product['unit']);
+                                $dataPrice = $product['price'];
+                                echo "<option value='{$product['id']}' data-category='$dataCategory' data-unit='$dataUnit' data-price='$dataPrice'>$displayText</option>";
+                            }
+                        } else {
+                            echo "<option value='' disabled>No products available</option>";
                         }
                         ?>
                     </select>
                 </div>
-                <span class="subtotal">Subtotal: 0.00</span>
-                <button type="button" class="remove-product" onclick="removeProduct(this)">X</button>
+                <div class="form-group">
+                    <label for="quantity_0">Quantity</label>
+                    <input type="number" name="quantity[]" id="quantity_0" step="0.01" min="0.01" required oninput="calculateTotal(0)">
+                </div>
+                <div class="form-group">
+                    <label for="price_0">Price</label>
+                    <input type="number" name="price[]" id="price_0" step="0.01" min="0" required oninput="calculateTotal(0)">
+                </div>
+                <div class="form-group">
+                    <label for="total_0">Total</label>
+                    <input type="number" id="total_0" step="0.01" readonly>
+                </div>
+                <div class="form-group">
+                    <label for="unit_0">Unit</label>
+                    <select name="unit[]" id="unit_0" required>
+                        <option value="">Select Unit</option>
+                    </select>
+                </div>
+                <div class="form-group type-group" style="display: none;">
+                    <label for="type_0">Type (Rod Only)</label>
+                    <select name="type[]" id="type_0">
+                        <option value="">Select Type</option>
+                        <?php
+                        if ($rodTypeResult && $rodTypeResult->num_rows > 0) {
+                            $rodTypeResult->data_seek(0);
+                            while ($rodType = $rodTypeResult->fetch_assoc()) {
+                                echo "<option value='{$rodType['type']}'>" . htmlspecialchars($rodType['type']) . "</option>";
+                            }
+                        }
+                        ?>
+                    </select>
+                </div>
             </div>
-        </div>
-        <button type="button" id="add-product-btn">Add Product</button><br>
+        <?php } ?>
+    </div>
 
-        <label>Total: <span id="total">0.00</span></label><br>
-        <label for="paid_amount">Paid Amount:</label>
-        <input type="number" name="paid_amount" id="paid_amount" step="0.01" min="0" value="0" oninput="updateDue()" required><br>
-        <label>Due: <span id="due">0.00</span></label><br>
-        <label for="purchase_date">Purchase Date:</label>
-        <input type="date" name="purchase_date" id="purchase_date" value="<?php echo date('Y-m-d'); ?>" required><br>
-        <label for="payment_method">Payment Method:</label>
-        <select name="payment_method" id="payment_method" required>
+    <button type="button" onclick="addProductItem()">Add Another Product</button>
+
+    <div class="form-group">
+        <label for="grand_total">Grand Total</label>
+        <input type="number" id="grand_total" step="0.01" value="<?php echo isset($editPurchase) ? $editPurchase['total'] : '0'; ?>" readonly>
+    </div>
+
+    <div class="form-group">
+        <label for="paid">Paid Amount</label>
+        <input type="number" name="paid" id="paid" step="0.01" min="0" value="<?php echo isset($editPurchase) ? $editPurchase['paid'] : ''; ?>" required oninput="calculateDue()">
+    </div>
+
+    <div class="form-group">
+        <label for="due">Due Amount</label>
+        <input type="number" id="due" step="0.01" value="<?php echo isset($editPurchase) ? $editPurchase['due'] : '0'; ?>" readonly>
+    </div>
+
+    <div class="form-group">
+        <label for="payment_method_id">Payment Method</label>
+        <select name="payment_method_id" id="payment_method_id" required>
             <option value="">Select Payment Method</option>
-            <option value="cash">Cash</option>
-            <option value="bank_transfer">Bank Transfer</option>
-            <option value="credit_card">Credit Card</option>
-        </select><br>
-        <button type="submit" name="add_purchase">Add Purchase</button>
-    </form>
+            <?php
+            if ($paymentResult && $paymentResult->num_rows > 0) {
+                $paymentResult->data_seek(0);
+                while ($payment = $paymentResult->fetch_assoc()) {
+                    $selected = (isset($editPurchase) && $editPurchase['payment_method_id'] == $payment['id']) ? 'selected' : '';
+                    echo "<option value='{$payment['id']}' $selected>" . htmlspecialchars($payment['method']) . "</option>";
+                }
+            } else {
+                echo "<option value='' disabled>No payment methods available</option>";
+            }
+            ?>
+        </select>
+    </div>
 
-    <h3>Purchase List</h3>
-    <input type="text" id="searchInput" placeholder="Search by Name, Phone, Address, or Invoice Number" onkeyup="filterTable()">
-    <table id="purchaseTable">
+    <button type="submit"><?php echo isset($editPurchase) ? 'Update Purchase' : 'Record Purchase'; ?></button>
+    <?php if (isset($editPurchase)) { ?>
+        <a href="buy.php" class="btn btn-secondary">Cancel Update</a>
+    <?php } ?>
+</form>
+
+<!-- Purchase List -->
+<h3>Purchase List</h3>
+<?php if ($purchaseListResult && $purchaseListResult->num_rows > 0) { ?>
+    <table>
         <thead>
             <tr>
-                <th>Seller Name</th>
                 <th>Invoice Number</th>
+                <th>Seller</th>
+                <th>Products</th>
                 <th>Purchase Date</th>
-                <th>Total Stock Purchased</th>
+                <th>Payment Method</th>
                 <th>Total</th>
                 <th>Paid</th>
                 <th>Due</th>
-                <th>Payment Method</th>
-                <th>Products</th>
-                <th>Action</th>
+                <th>Created At</th>
+                <th>Actions</th>
             </tr>
         </thead>
         <tbody>
-            <?php
-            if (isset($purchaseResult) && $purchaseResult !== false && $purchaseResult->num_rows > 0) {
-                while ($purchaseRow = $purchaseResult->fetch_assoc()) {
-                    $purchase_id = $purchaseRow['id'];
-                    // Fetch products for this purchase
-                    $itemsSql = "SELECT pi.*, pr.name as product_name, pr.brand_name, pr.type as product_type, pr.category_id, c.name as category_name 
-                                 FROM purchase_items pi 
-                                 LEFT JOIN products pr ON pi.product_id = pr.id 
-                                 LEFT JOIN categories c ON pr.category_id = c.id 
-                                 WHERE pi.purchase_id = ?";
-                    $stmt = $conn->prepare($itemsSql);
-                    if ($stmt === false) {
-                        echo "<tr><td colspan='10'>Error fetching items: " . htmlspecialchars($conn->error) . "</td></tr>";
-                        continue;
-                    }
-                    $stmt->bind_param("i", $purchase_id);
-                    $stmt->execute();
-                    $itemsResult = $stmt->get_result();
-                    $items = [];
-                    while ($item = $itemsResult->fetch_assoc()) {
-                        $items[] = $item;
-                    }
-
-                    // Calculate total stock purchased
-                    $totalStockSql = "SELECT SUM(quantity) as total_quantity 
-                                      FROM purchase_items 
-                                      WHERE purchase_id = ?";
-                    $stockStmt = $conn->prepare($totalStockSql);
-                    if ($stockStmt === false) {
-                        echo "<tr><td colspan='10'>Error calculating stock: " . htmlspecialchars($conn->error) . "</td></tr>";
-                        continue;
-                    }
-                    $stockStmt->bind_param("i", $purchase_id);
-                    $stockStmt->execute();
-                    $stockResult = $stockStmt->get_result();
-                    $stockRow = $stockResult->fetch_assoc();
-                    $totalStock = $stockRow['total_quantity'] ?? 0;
-
-                    echo "<tr>";
-                    echo "<td>" . htmlspecialchars($purchaseRow['seller_name'] ?? 'N/A') . "</td>";
-                    echo "<td>" . htmlspecialchars($purchaseRow['invoice_number']) . "</td>";
-                    echo "<td>" . htmlspecialchars($purchaseRow['purchase_date']) . "</td>";
-                    echo "<td>" . number_format($totalStock, 2) . "</td>";
-                    echo "<td>" . number_format($purchaseRow['total'], 2) . "</td>";
-                    echo "<td>" . number_format($purchaseRow['paid'], 2) . "</td>";
-                    echo "<td>" . number_format($purchaseRow['due'], 2) . "</td>";
-                    echo "<td>" . htmlspecialchars(ucfirst($purchaseRow['payment_method'])) . "</td>";
-                    echo "<td>";
-                    if ($itemsResult->num_rows > 0) {
-                        echo "<button onclick=\"toggleProducts('" . htmlspecialchars($purchaseRow['invoice_number']) . "')\">Show Products</button>";
-                        echo "<div id='products-" . htmlspecialchars($purchaseRow['invoice_number']) . "' style='display:none;'>";
-                        echo "<table class='sub-table'>";
-                        echo "<thead><tr><th>Product Name</th><th>Quantity</th><th>Price</th><th>Unit</th><th>Type</th><th>Subtotal</th></tr></thead>";
-                        echo "<tbody>";
-                        foreach ($items as $item) {
-                            $subtotal = $item['quantity'] * $item['price'];
-                            $productDisplay = htmlspecialchars($item['product_name'] . " (" . $item['brand_name'] . ", " . ($item['product_type'] ?: 'N/A') . ")");
-                            echo "<tr>";
-                            echo "<td>" . $productDisplay . "</td>";
-                            echo "<td>" . htmlspecialchars($item['quantity']) . "</td>";
-                            echo "<td>" . number_format($item['price'], 2) . "</td>";
-                            echo "<td>" . htmlspecialchars($item['unit']) . "</td>";
-                            echo "<td>" . htmlspecialchars($item['type'] ?: 'N/A') . "</td>";
-                            echo "<td>" . number_format($subtotal, 2) . "</td>";
-                            echo "</tr>";
-                        }
-                        echo "</tbody></table>";
-                        echo "</div>";
-                    } else {
-                        echo "No products";
-                    }
-                    echo "</td>";
-                    echo "<td>";
-                    echo "<button onclick=\"toggleUpdateForm('" . htmlspecialchars($purchaseRow['invoice_number']) . "')\">Update</button> ";
-                    echo "<a href='buy.php?action=delete&invoice_number=" . urlencode($purchaseRow['invoice_number']) . "' onclick=\"return confirm('Are you sure you want to delete this purchase?')\"><button class='delete-btn'>Delete</button></a> ";
-                    echo "<a href='buy.php?view_invoice=" . urlencode($purchaseRow['invoice_number']) . "'><button class='invoice-btn'>Generate Invoice</button></a>";
-                    echo "</td>";
-                    echo "</tr>";
-
-                    // Inline Update Form
-                    echo "<tr>";
-                    echo "<td colspan='10'>";
-                    echo "<div id='update-form-" . htmlspecialchars($purchaseRow['invoice_number']) . "' style='display:none;'>";
-                    echo "<h3>Update Purchase</h3>";
-                    echo "<form method='post' class='update-purchase-form'>";
-                    echo "<input type='hidden' name='invoice_number' value='" . htmlspecialchars($purchaseRow['invoice_number']) . "'>";
-                    echo "<label for='seller_id_" . htmlspecialchars($purchaseRow['invoice_number']) . "'>Select Seller:</label>";
-                    echo "<select name='seller_id' id='seller_id_" . htmlspecialchars($purchaseRow['invoice_number']) . "' required>";
-                    echo "<option value=''>Select Seller</option>";
-                    if (isset($sellerResult) && $sellerResult !== false) {
-                        $sellerResult->data_seek(0); // Reset seller result pointer
-                        while ($sellerRow = $sellerResult->fetch_assoc()) {
-                            $selected = $sellerRow['id'] == $purchaseRow['seller_id'] ? 'selected' : '';
-                            echo "<option value='" . $sellerRow['id'] . "' $selected>" . htmlspecialchars($sellerRow['name']) . "</option>";
-                        }
-                    }
-                    echo "</select><br>";
-
-                    echo "<label for='category_id_" . htmlspecialchars($purchaseRow['invoice_number']) . "'>Select Category:</label>";
-                    echo "<select name='category_id' id='category_id_" . htmlspecialchars($purchaseRow['invoice_number']) . "' onchange=\"filterProducts('" . htmlspecialchars($purchaseRow['invoice_number']) . "')\">";
-                    echo "<option value=''>Select Category</option>";
-                    if (isset($categoryResult) && $categoryResult !== false) {
-                        $categoryResult->data_seek(0);
-                        while ($categoryRow = $categoryResult->fetch_assoc()) {
-                            echo "<option value='" . $categoryRow['id'] . "'>" . htmlspecialchars($categoryRow['name']) . "</option>";
-                        }
-                    }
-                    echo "</select><br>";
-
-                    echo "<h4>Products:</h4>";
-                    echo "<div id='update-product-list-" . htmlspecialchars($purchaseRow['invoice_number']) . "'>";
-                    foreach ($items as $index => $item) {
-                        echo "<div class='product-row'>";
-                        echo "<select name='products[]' class='product-select' onchange='updateProductDetails(this)' required>";
-                        echo "<option value=''>Select Product</option>";
-                        if (!empty($products)) {
-                            foreach ($products as $product) {
-                                $displayText = htmlspecialchars($product['name'] . " (" . $product['brand_name'] . ", " . ($product['type'] ?: 'N/A') . ") - Stock: " . $product['quantity']);
-                                $selected = $product['id'] == $item['product_id'] ? 'selected' : '';
-                                echo "<option value='" . $product['id'] . "' data-price='" . $product['price'] . "' data-category='" . htmlspecialchars($product['category_name']) . "' data-category-id='" . $product['category_id'] . "' $selected>" . $displayText . "</option>";
+            <?php while ($purchase = $purchaseListResult->fetch_assoc()) { ?>
+                <tr>
+                    <td><?php echo htmlspecialchars($purchase['invoice_number']); ?></td>
+                    <td><?php echo htmlspecialchars($purchase['seller_name']); ?></td>
+                    <td>
+                        <?php
+                        $itemsSql = "SELECT pi.*, p.name as product_name 
+                                     FROM purchase_items pi 
+                                     LEFT JOIN products p ON pi.product_id = p.id 
+                                     WHERE pi.purchase_id = ?";
+                        $itemsStmt = $conn->prepare($itemsSql);
+                        $itemsStmt->bind_param("i", $purchase['id']);
+                        $itemsStmt->execute();
+                        $itemsResult = $itemsStmt->get_result();
+                        if ($itemsResult->num_rows > 0) {
+                            echo "<ul class='product-details'>";
+                            while ($item = $itemsResult->fetch_assoc()) {
+                                echo "<li>";
+                                echo "<strong>" . htmlspecialchars($item['product_name'] ?? 'Unknown Product') . "</strong>";
+                                echo "<ul>";
+                                echo "<li><strong>Qty:</strong> " . htmlspecialchars($item['quantity']) . "</li>";
+                                echo "<li><strong>Price:</strong> " . number_format($item['price'], 2) . "</li>";
+                                echo "<li><strong>Total:</strong> " . number_format($item['total'], 2) . "</li>";
+                                echo "<li><strong>Unit:</strong> " . htmlspecialchars($item['unit']) . "</li>";
+                                if ($item['type']) {
+                                    echo "<li><strong>Type:</strong> " . htmlspecialchars($item['type']) . "</li>";
+                                }
+                                echo "</ul>";
+                                echo "</li>";
                             }
+                            echo "</ul>";
+                        } else {
+                            echo "No products found.";
                         }
-                        echo "</select>";
-                        echo "<input type='number' name='quantities[]' placeholder='Quantity' step='0.01' min='0' value='" . htmlspecialchars($item['quantity']) . "' oninput='updateSubtotal(this)' required>";
-                        echo "<input type='number' name='prices[]' placeholder='Price' step='0.01' min='0' value='" . htmlspecialchars($item['price']) . "' oninput='updateSubtotal(this)' required>";
-                        echo "<select name='units[]' class='unit-select' required>";
-                        echo "<option value=''>Select Unit</option>";
-                        $categoryName = $item['category_name'];
-                        if (isset($unitOptions[$categoryName])) {
-                            foreach ($unitOptions[$categoryName] as $unitOption) {
-                                $selected = $unitOption == $item['unit'] ? 'selected' : '';
-                                echo "<option value='" . htmlspecialchars($unitOption) . "' $selected>" . htmlspecialchars($unitOption) . "</option>";
-                            }
-                        }
-                        echo "</select>";
-                        echo "<div class='type-container' style='display: " . ($categoryName == 'Rod' ? 'block' : 'none') . ";'>";
-                        echo "<select name='types[]' class='type-select' " . ($categoryName == 'Rod' ? 'required' : '') . ">";
-                        echo "<option value=''>Select Type</option>";
-                        foreach ($rodTypes as $type) {
-                            $selected = $type == $item['type'] ? 'selected' : '';
-                            echo "<option value='" . htmlspecialchars($type) . "' $selected>" . htmlspecialchars($type) . "</option>";
-                        }
-                        echo "</select>";
-                        echo "</div>";
-                        echo "<span class='subtotal'>Subtotal: " . number_format($item['quantity'] * $item['price'], 2) . "</span>";
-                        echo "<button type='button' class='remove-product' onclick='removeProduct(this)'>X</button>";
-                        echo "</div>";
-                    }
-                    echo "</div>";
-                    echo "<button type='button' onclick=\"addProduct('" . htmlspecialchars($purchaseRow['invoice_number']) . "')\">Add Product</button><br>";
-
-                    echo "<label>Total: <span id='update-total-" . htmlspecialchars($purchaseRow['invoice_number']) . "'>" . number_format($purchaseRow['total'], 2) . "</span></label><br>";
-                    echo "<label for='paid_amount_" . htmlspecialchars($purchaseRow['invoice_number']) . "'>Paid Amount:</label>";
-                    echo "<input type='number' name='paid_amount' id='paid_amount_" . htmlspecialchars($purchaseRow['invoice_number']) . "' step='0.01' min='0' value='" . htmlspecialchars($purchaseRow['paid']) . "' oninput=\"updateDue('" . htmlspecialchars($purchaseRow['invoice_number']) . "')\" required><br>";
-                    echo "<label>Due: <span id='update-due-" . htmlspecialchars($purchaseRow['invoice_number']) . "'>" . number_format($purchaseRow['due'], 2) . "</span></label><br>";
-                    echo "<label for='purchase_date_" . htmlspecialchars($purchaseRow['invoice_number']) . "'>Purchase Date:</label>";
-                    echo "<input type='date' name='purchase_date' id='purchase_date_" . htmlspecialchars($purchaseRow['invoice_number']) . "' value='" . htmlspecialchars($purchaseRow['purchase_date']) . "' required><br>";
-                    echo "<label for='payment_method_" . htmlspecialchars($purchaseRow['invoice_number']) . "'>Payment Method:</label>";
-                    echo "<select name='payment_method' id='payment_method_" . htmlspecialchars($purchaseRow['invoice_number']) . "' required>";
-                    echo "<option value=''>Select Payment Method</option>";
-                    echo "<option value='cash' " . ($purchaseRow['payment_method'] == 'cash' ? 'selected' : '') . ">Cash</option>";
-                    echo "<option value='bank_transfer' " . ($purchaseRow['payment_method'] == 'bank_transfer' ? 'selected' : '') . ">Bank Transfer</option>";
-                    echo "<option value='credit_card' " . ($purchaseRow['payment_method'] == 'credit_card' ? 'selected' : '') . ">Credit Card</option>";
-                    echo "</select><br>";
-                    echo "<button type='submit' name='update_purchase'>Update Purchase</button>";
-                    echo "</form>";
-                    echo "</div>";
-                    echo "</td>";
-                    echo "</tr>";
-                }
-            } else {
-                if (!isset($error)) {
-                    echo "<tr><td colspan='10'>No purchases found</td></tr>";
-                }
-            }
-            ?>
+                        $itemsStmt->close();
+                        ?>
+                    </td>
+                    <td><?php echo htmlspecialchars($purchase['purchase_date']); ?></td>
+                    <td><?php echo htmlspecialchars($purchase['payment_method']); ?></td>
+                    <td><?php echo number_format($purchase['total'], 2); ?></td>
+                    <td><?php echo number_format($purchase['paid'], 2); ?></td>
+                    <td><?php echo number_format($purchase['due'], 2); ?></td>
+                    <td><?php echo htmlspecialchars($purchase['created_at']); ?></td>
+                    <td class="action-buttons">
+                        <a href="buy.php?edit_id=<?php echo $purchase['id']; ?>" class="btn btn-primary">Edit</a>
+                        <a href="buy.php?delete_id=<?php echo $purchase['id']; ?>" class="btn btn-danger" onclick="return confirm('Are you sure you want to delete this purchase?');">Delete</a>
+                        <a href="invoice.php?purchase_id=<?php echo $purchase['id']; ?>" class="btn btn-info">Invoice</a>
+                    </td>
+                </tr>
+            <?php } ?>
         </tbody>
     </table>
-
-<?php endif; ?>
+<?php } else { ?>
+    <p>No purchases found.</p>
+<?php } ?>
 
 <script>
-const unitOptions = <?php echo json_encode($unitOptions); ?>;
-const rodTypes = <?php echo json_encode($rodTypes); ?>;
-const allProducts = <?php echo json_encode($products); ?>;
+let productCount = <?php echo isset($editPurchase) ? count($editPurchase['items']) : 1; ?>;
 
-function updateProductDetails(selectElement) {
-    const row = selectElement.closest('.product-row');
-    const priceInput = row.querySelector('input[name="prices[]"]');
-    const unitSelect = row.querySelector('.unit-select');
-    const typeContainer = row.querySelector('.type-container');
-    const typeSelect = row.querySelector('.type-select');
-
-    // Update price
-    const selectedOption = selectElement.options[selectElement.selectedIndex];
-    const price = selectedOption.getAttribute('data-price') || 0;
-    priceInput.value = parseFloat(price).toFixed(2);
-
-    // Update unit dropdown based on category
-    const category = selectedOption.getAttribute('data-category') || '';
-    unitSelect.innerHTML = '<option value="">Select Unit</option>';
-    if (unitOptions[category]) {
-        unitSelect.innerHTML = '<option value="">Select Unit</option>';
-        unitOptions[category].forEach(unit => {
-            const option = document.createElement('option');
-            option.value = unit;
-            option.textContent = unit;
-            unitSelect.appendChild(option);
-        });
-    } else {
-        console.warn('No units available for category:', category);
-    }
-
-    // Show/hide type dropdown for Rods
-    if (category === 'Rod') {
-        typeContainer.style.display = 'block';
-        typeSelect.setAttribute('required', 'required');
-    } else {
-        typeContainer.style.display = 'none';
-        typeSelect.removeAttribute('required');
-        typeSelect.value = '';
-    }
-
-    updateSubtotal(selectElement);
-}
-
-function filterProducts(invoiceNumber = null) {
-    const categoryId = invoiceNumber 
-        ? document.getElementById('category_id_' + invoiceNumber).value 
-        : document.getElementById('category_id').value;
-    const productSelects = invoiceNumber 
-        ? document.querySelectorAll('#update-product-list-' + invoiceNumber + ' .product-select') 
-        : document.querySelectorAll('#product-list .product-select');
-
-    productSelects.forEach(select => {
-        const currentValue = select.value;
-        select.innerHTML = '<option value="">Select Product</option>';
-        
-        allProducts.forEach(product => {
-            if (!categoryId || product.category_id == categoryId) {
-                const displayText = `${product.name} (${product.brand_name}, ${product.type || 'N/A'}) - Stock: ${product.quantity}`;
-                const option = document.createElement('option');
-                option.value = product.id;
-                option.textContent = displayText;
-                option.setAttribute('data-price', product.price);
-                option.setAttribute('data-category', product.category_name);
-                option.setAttribute('data-category-id', product.category_id);
-                if (product.id == currentValue) {
-                    option.selected = true;
-                }
-                select.appendChild(option);
-            }
-        });
-
-        updateProductDetails(select);
-    });
-}
-
-function updateSubtotal(element) {
-    const row = element.closest('.product-row');
-    const quantityInput = row.querySelector('input[name="quantities[]"]');
-    const priceInput = row.querySelector('input[name="prices[]"]');
-    const subtotalSpan = row.querySelector('.subtotal');
-
-    const quantity = parseFloat(quantityInput.value) || 0;
-    const price = parseFloat(priceInput.value) || 0;
-    const subtotal = quantity * price;
-    subtotalSpan.textContent = `Subtotal: ${subtotal.toFixed(2)}`;
-
-    updateTotal(row.closest('form'));
-}
-
-function updateTotal(form) {
-    const subtotals = form.querySelectorAll('.subtotal');
-    let total = 0;
-    subtotals.forEach(subtotal => {
-        const value = parseFloat(subtotal.textContent.replace('Subtotal: ', '')) || 0;
-        total += value;
-    });
-
-    const totalSpan = form.querySelector('[id^="total"], [id^="update-total-"]');
-    const invoiceNumber = totalSpan.id.replace('update-total-', '');
-    totalSpan.textContent = total.toFixed(2);
-
-    updateDue(invoiceNumber || null);
-}
-
-function updateDue(invoiceNumber = null) {
-    const totalSpan = invoiceNumber 
-        ? document.getElementById('update-total-' + invoiceNumber) 
-        : document.getElementById('total');
-    const paidInput = invoiceNumber 
-        ? document.getElementById('paid_amount_' + invoiceNumber) 
-        : document.getElementById('paid_amount');
-    const dueSpan = invoiceNumber 
-        ? document.getElementById('update-due-' + invoiceNumber) 
-        : document.getElementById('due');
-
-    const total = parseFloat(totalSpan.textContent) || 0;
-    const paid = parseFloat(paidInput.value) || 0;
-    const due = total - paid;
-    dueSpan.textContent = due.toFixed(2);
-}
-
-function removeProduct(button) {
-    const productRows = button.closest('.product-list') ? button.closest('.product-list').querySelectorAll('.product-row') : button.closest('#product-list, [id^="update-product-list-"]').querySelectorAll('.product-row');
-    if (productRows.length > 1) {
-        const row = button.closest('.product-row');
-        const form = row.closest('form');
-        row.remove();
-        updateTotal(form);
+// Preload category units into a JavaScript object
+const categoryUnits = {};
+<?php
+if ($unitResult && $unitResult->num_rows > 0) {
+    $unitResult->data_seek(0);
+    while ($unit = $unitResult->fetch_assoc()) {
+        echo "if (!categoryUnits['{$unit['category_name']}']) categoryUnits['{$unit['category_name']}'] = [];\n";
+        echo "categoryUnits['{$unit['category_name']}'].push('{$unit['unit']}');\n";
     }
 }
+?>
 
-function addProduct(invoiceNumber = null) {
-    const productList = invoiceNumber 
-        ? document.getElementById('update-product-list-' + invoiceNumber) 
-        : document.getElementById('product-list');
-    const newRow = document.createElement('div');
-    newRow.className = 'product-row';
-    newRow.innerHTML = `
-        <select name="products[]" class="product-select" onchange="updateProductDetails(this)" required>
-            <option value="">Select Product</option>
-            <?php
-            if (!empty($products)) {
-                foreach ($products as $product) {
-                    $displayText = htmlspecialchars($product['name'] . " (" . $product['brand_name'] . ", " . ($product['type'] ?: 'N/A') . ") - Stock: " . $product['quantity']);
-                    echo "<option value='" . $product['id'] . "' data-price='" . $product['price'] . "' data-category='" . htmlspecialchars($product['category_name']) . "' data-category-id='" . $product['category_id'] . "'>" . $displayText . "</option>";
-                }
-            }
-            ?>
-        </select>
-        <input type="number" name="quantities[]" placeholder="Quantity" step="0.01" min="0" oninput="updateSubtotal(this)" required>
-        <input type="number" name="prices[]" placeholder="Price" step="0.01" min="0" oninput="updateSubtotal(this)" required>
-        <select name="units[]" class="unit-select" required>
-            <option value="">Select Unit</option>
-        </select>
-        <div class="type-container" style="display: none;">
-            <select name="types[]" class="type-select">
-                <option value="">Select Type</option>
+function addProductItem() {
+    const container = document.getElementById('product-items');
+    const newItem = document.createElement('div');
+    newItem.className = 'product-item';
+    newItem.innerHTML = `
+        <h4>Product ${productCount + 1}</h4>
+        <div class="form-group">
+            <label for="product_id_${productCount}">Select Product</label>
+            <select name="product_id[]" id="product_id_${productCount}" class="product-select" required onchange="updateProductDetails(${productCount})">
+                <option value="">Select Product</option>
                 <?php
-                foreach ($rodTypes as $type) {
-                    echo "<option value='" . htmlspecialchars($type) . "'>" . htmlspecialchars($type) . "</option>";
+                $productResult->data_seek(0);
+                while ($product = $productResult->fetch_assoc()) {
+                    $displayText = htmlspecialchars("{$product['name']} ({$product['category_name']}) - {$product['brand_name']} - {$product['unit']} - Price: {$product['price']} - Stock: {$product['quantity']}");
+                    $dataCategory = htmlspecialchars($product['category_name']);
+                    $dataUnit = htmlspecialchars($product['unit']);
+                    $dataPrice = $product['price'];
+                    echo "<option value='{$product['id']}' data-category='$dataCategory' data-unit='$dataUnit' data-price='$dataPrice'>$displayText</option>";
                 }
                 ?>
             </select>
         </div>
-        <span class="subtotal">Subtotal: 0.00</span>
-        <button type="button" class="remove-product" onclick="removeProduct(this)">X</button>
+        <div class="form-group">
+            <label for="quantity_${productCount}">Quantity</label>
+            <input type="number" name="quantity[]" id="quantity_${productCount}" step="0.01" min="0.01" required oninput="calculateTotal(${productCount})">
+        </div>
+        <div class="form-group">
+            <label for="price_${productCount}">Price</label>
+            <input type="number" name="price[]" id="price_${productCount}" step="0.01" min="0" required oninput="calculateTotal(${productCount})">
+        </div>
+        <div class="form-group">
+            <label for="total_${productCount}">Total</label>
+            <input type="number" id="total_${productCount}" step="0.01" readonly>
+        </div>
+        <div class="form-group">
+            <label for="unit_${productCount}">Unit</label>
+            <select name="unit[]" id="unit_${productCount}" required>
+                <option value="">Select Unit</option>
+            </select>
+        </div>
+        <div class="form-group type-group" style="display: none;">
+            <label for="type_${productCount}">Type (Rod Only)</label>
+            <select name="type[]" id="type_${productCount}">
+                <option value="">Select Type</option>
+                <?php
+                $rodTypeResult->data_seek(0);
+                while ($rodType = $rodTypeResult->fetch_assoc()) {
+                    echo "<option value='{$rodType['type']}'>" . htmlspecialchars($rodType['type']) . "</option>";
+                }
+                ?>
+            </select>
+        </div>
+        <button type="button" onclick="removeProductItem(this)">Remove</button>
     `;
-    productList.appendChild(newRow);
-    filterProducts(invoiceNumber);
+    container.appendChild(newItem);
+    productCount++;
 }
 
-document.getElementById('add-product-btn')?.addEventListener('click', function() {
-    addProduct();
-});
+function removeProductItem(button) {
+    button.parentElement.remove();
+    productCount--;
+    updateGrandTotal();
+}
 
-function filterTable() {
-    const input = document.getElementById('searchInput')?.value.toLowerCase();
-    const table = document.getElementById('purchaseTable');
-    const rows = table?.getElementsByTagName('tr');
+function updateProductDetails(index) {
+    const select = document.getElementById(`product_id_${index}`);
+    const unitSelect = document.getElementById(`unit_${index}`);
+    const typeGroup = select.parentElement.parentElement.querySelector('.type-group');
+    const priceInput = document.getElementById(`price_${index}`);
 
-    if (!rows) return;
+    // Reset unit and type
+    unitSelect.innerHTML = '<option value="">Select Unit</option>';
+    typeGroup.style.display = 'none';
 
-    for (let i = 1; i < rows.length; i += 2) { // Increment by 2 to skip update form rows
-        const cells = rows[i].getElementsByTagName('td');
-        let match = false;
-        for (let j = 0; j < cells.length - 1; j++) {
-            if (cells[j].textContent.toLowerCase().indexOf(input) > -1) {
-                match = true;
-                break;
-            }
+    if (select.value) {
+        const selectedOption = select.options[select.selectedIndex];
+        const category = selectedOption.getAttribute('data-category');
+        const defaultUnit = selectedOption.getAttribute('data-unit');
+        const defaultPrice = parseFloat(selectedOption.getAttribute('data-price'));
+
+        // Populate unit dropdown based on category
+        if (categoryUnits[category]) {
+            categoryUnits[category].forEach(unit => {
+                const option = document.createElement('option');
+                option.value = unit;
+                option.text = unit;
+                if (unit === defaultUnit) {
+                    option.selected = true;
+                }
+                unitSelect.appendChild(option);
+            });
         }
-        rows[i].style.display = match ? '' : 'none';
-        rows[i + 1].style.display = match ? '' : 'none'; // Hide/show the update form row
+
+        // Show type dropdown for Rod category
+        if (category === 'Rod') {
+            typeGroup.style.display = 'block';
+        }
+
+        // Set default price
+        priceInput.value = defaultPrice.toFixed(2);
+        calculateTotal(index);
     }
 }
 
-function toggleProducts(invoiceNumber) {
-    const productDiv = document.getElementById('products-' + invoiceNumber);
-    const button = event.currentTarget;
-    if (productDiv.style.display === 'none') {
-        productDiv.style.display = 'block';
-        button.textContent = 'Hide Products';
-    } else {
-        productDiv.style.display = 'none';
-        button.textContent = 'Show Products';
+function calculateTotal(index) {
+    const quantity = parseFloat(document.getElementById(`quantity_${index}`).value) || 0;
+    const price = parseFloat(document.getElementById(`price_${index}`).value) || 0;
+    const total = quantity * price;
+    document.getElementById(`total_${index}`).value = total.toFixed(2);
+    updateGrandTotal();
+}
+
+function updateGrandTotal() {
+    let grandTotal = 0;
+    for (let i = 0; i < productCount; i++) {
+        const totalInput = document.getElementById(`total_${i}`);
+        if (totalInput) {
+            grandTotal += parseFloat(totalInput.value) || 0;
+        }
     }
+    document.getElementById('grand_total').value = grandTotal.toFixed(2);
+    calculateDue();
 }
 
-function toggleUpdateForm(invoiceNumber) {
-    const updateFormDiv = document.getElementById('update-form-' + invoiceNumber);
-    const button = event.currentTarget;
-    if (updateFormDiv.style.display === 'none') {
-        updateFormDiv.style.display = 'block';
-        button.textContent = 'Hide Update Form';
-        // Trigger updateProductDetails for pre-filled products
-        const productSelects = updateFormDiv.querySelectorAll('.product-select');
-        productSelects.forEach(select => {
-            if (select.value) {
-                updateProductDetails(select);
-            }
-        });
-    } else {
-        updateFormDiv.style.display = 'none';
-        button.textContent = 'Update';
+function calculateDue() {
+    const grandTotal = parseFloat(document.getElementById('grand_total').value) || 0;
+    const paid = parseFloat(document.getElementById('paid').value) || 0;
+    const due = grandTotal - paid;
+    document.getElementById('due').value = due.toFixed(2);
+}
+
+// Initialize product items
+document.addEventListener('DOMContentLoaded', () => {
+    for (let i = 0; i < productCount; i++) {
+        updateProductDetails(i);
+        calculateTotal(i);
     }
-}
-
-function printInvoice() {
-    window.print();
-}
-
-function downloadInvoice(invoiceNumber) {
-    const element = document.getElementById('invoice');
-    const opt = {
-        margin: 0.5,
-        filename: `Invoice_${invoiceNumber}.pdf`,
-        image: { type: 'jpeg', quality: 0.98 },
-        html2canvas: { scale: 2 },
-        jsPDF: { unit: 'in', format: 'letter', orientation: 'portrait' }
-    };
-    html2pdf().set(opt).from(element).save();
-}
+});
 </script>
 
 <style>
-form {
-    background-color: #fff;
-    padding: 20px;
-    border-radius: 8px;
-    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.1);
-    margin-bottom: 20px;
+.form-group {
+    margin-bottom: 15px;
 }
 
-label {
+.form-group label {
     display: block;
-    margin: 10px 0 5px;
+    margin-bottom: 5px;
 }
 
-select, input[type="number"], input[type="date"], input[type="text"], input[type="email"], textarea {
+.form-group input, .form-group select {
     width: 100%;
-    padding: 10px;
-    margin: 5px 0;
-    border: 1px solid #ddd;
-    border-radius: 4px;
-    box-sizing: border-box;
-}
-
-textarea {
-    height: 80px;
-    resize: vertical;
-}
-
-.product-row {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    margin-bottom: 10px;
-}
-
-.product-row select, .product-row input {
-    flex: 1;
-}
-
-.product-row .subtotal {
-    flex: 0 0 100px;
-    font-weight: bold;
-}
-
-.product-row .remove-product {
-    background-color: #d32f2f;
-    color: white;
-    border: none;
-    padding: 5px 10px;
-    border-radius: 4px;
-    cursor: pointer;
-}
-
-.product-row .remove-product:hover {
-    background-color: #b71c1c;
-}
-
-#add-product-btn, button[onclick^="addProduct"] {
-    background-color: #2196F3;
-    color: white;
-    padding: 10px 20px;
-    border: none;
-    border-radius: 4px;
-    cursor: pointer;
-    margin: 10px 0;
-}
-
-#add-product-btn:hover, button[onclick^="addProduct"]:hover {
-    background-color: #1e88e5;
-}
-
-button[type="submit"] {
-    background-color: #4CAF50;
-    color: white;
-    padding: 10px 20px;
-    border: none;
-    border-radius: 4px;
-    cursor: pointer;
-}
-
-button[type="submit"]:hover {
-    background-color: #45a049;
-}
-
-table {
-    width: 100%;
-    border-collapse: collapse;
-    margin-bottom: 20px;
-}
-
-th, td {
-    padding: 12px;
-    text-align: left;
-    border-bottom: 1px solid #ddd;
-}
-
-th {
-    background-color: #4CAF50;
-    color: white;
-}
-
-tr:nth-child(even) {
-    background-color: #f9f9f9;
-}
-
-tr:hover {
-    background-color: #f1f1f1;
-}
-
-.sub-table {
-    width: 100%;
-    border-collapse: collapse;
-    margin-top: 10px;
-}
-
-.sub-table th, .sub-table td {
     padding: 8px;
-    border-bottom: 1px solid #ddd;
-}
-
-.sub-table th {
-    background-color: #e0e0e0;
-    color: #333;
-}
-
-#searchInput {
-    width: 100%;
-    padding: 10px;
-    margin-bottom: 20px;
     border: 1px solid #ddd;
     border-radius: 4px;
 }
 
-.success {
-    color: green;
-    background-color: #e0f7fa;
-    padding: 10px;
+.product-item {
+    border: 1px solid #ddd;
+    padding: 15px;
+    margin-bottom: 15px;
     border-radius: 4px;
-    margin-bottom: 20px;
+}
+
+button {
+    padding: 10px 20px;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    margin: 5px 0;
+}
+
+button[type="submit"], button[type="button"] {
+    background-color: #4CAF50;
+    color: white;
+}
+
+button[type="button"]:hover, button[type="submit"]:hover {
+    background-color: #45a049;
 }
 
 .error {
@@ -1272,198 +889,130 @@ tr:hover {
     margin-bottom: 20px;
 }
 
-.delete-btn {
-    background-color: #d32f2f;
-    color: white;
-    border: none;
-    padding: 5px 10px;
+.success {
+    color: #2e7d32;
+    background-color: #e8f5e9;
+    padding: 10px;
     border-radius: 4px;
-    cursor: pointer;
-}
-
-.delete-btn:hover {
-    background-color: #b71c1c;
-}
-
-.invoice-btn {
-    background-color: #ff9800;
-    color: white;
-    border: none;
-    padding: 5px 10px;
-    border-radius: 4px;
-    cursor: pointer;
-}
-
-.invoice-btn:hover {
-    background-color: #f57c00;
-}
-
-/* Invoice Styles */
-.invoice-container {
-    background-color: #fff;
-    padding: 30px;
-    border-radius: 10px;
-    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
-    margin: 20px auto;
-    max-width: 900px;
-    font-family: 'Arial', sans-serif;
-}
-
-.invoice-header {
-    border-bottom: 2px solid #4CAF50;
-    padding-bottom: 20px;
     margin-bottom: 20px;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
 }
 
-.invoice-header h1 {
-    color: #4CAF50;
-    margin: 0;
-    font-size: 36px;
-    text-transform: uppercase;
-}
-
-.shop-details {
-    text-align: left;
-}
-
-.shop-details h2 {
-    margin: 0;
-    font-size: 24px;
-    color: #333;
-}
-
-.shop-details p {
-    margin: 5px 0;
-    color: #666;
-}
-
-.invoice-meta {
-    text-align: right;
-}
-
-.invoice-meta p {
-    margin: 5px 0;
-    color: #333;
-    font-weight: bold;
-}
-
-.seller-info {
-    margin-bottom: 30px;
-}
-
-.seller-info h3 {
-    color: #4CAF50;
-    border-left: 4px solid #4CAF50;
-    padding-left: 10px;
-    margin-bottom: 15px;
-}
-
-.seller-info p {
-    margin: 5px 0;
-    color: #666;
-}
-
-.invoice-table {
+table {
     width: 100%;
     border-collapse: collapse;
-    margin-bottom: 30px;
+    margin-top: 20px;
 }
 
-.invoice-table th, .invoice-table td {
-    padding: 12px;
+table, th, td {
     border: 1px solid #ddd;
+}
+
+th, td {
+    padding: 10px;
     text-align: left;
 }
 
-.invoice-table th {
-    background-color: #4CAF50;
-    color: white;
-    text-transform: uppercase;
+th {
+    background-color: #f2f2f2;
     font-weight: bold;
 }
 
-.invoice-table td {
-    background-color: #f9f9f9;
-}
-
-.invoice-table tr:nth-child(even) td {
-    background-color: #fff;
-}
-
-.invoice-summary {
-    text-align: right;
-    margin-bottom: 30px;
-    font-size: 16px;
-}
-
-.invoice-summary p {
-    margin: 5px 0;
-    color: #333;
-}
-
-.invoice-summary p strong {
-    color: #4CAF50;
-}
-
-.invoice-actions {
+th:last-child, td.action-buttons {
+    width: 150px;
     text-align: center;
 }
 
-.print-btn, .download-btn, .back-btn {
-    padding: 10px 20px;
-    border: none;
-    border-radius: 5px;
-    cursor: pointer;
-    margin: 0 10px;
-    font-size: 16px;
-    transition: background-color 0.3s;
+.action-buttons {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 10px 0;
 }
 
-.print-btn {
-    background-color: #4CAF50;
+.btn {
+    display: block;
+    width: 100px;
+    padding: 10px;
+    margin-bottom: 8px;
+    text-decoration: none;
+    border-radius: 4px;
+    font-size: 14px;
+    text-align: center;
+    color: white;
+    transition: background-color 0.3s ease, transform 0.1s ease;
+}
+
+.btn:last-child {
+    margin-bottom: 0;
+}
+
+.btn:hover {
+    transform: scale(1.05);
+}
+
+.btn-primary {
+    background-color: #007bff;
+}
+
+.btn-primary:hover {
+    background-color: #0056b3;
+}
+
+.btn-danger {
+    background-color: #dc3545;
+}
+
+.btn-danger:hover {
+    background-color: #c82333;
+}
+
+.btn-info {
+    background-color: #17a2b8;
+}
+
+.btn-info:hover {
+    background-color: #138496;
+}
+
+.btn-secondary {
+    background-color: #6c757d;
     color: white;
 }
 
-.print-btn:hover {
-    background-color: #45a049;
+.btn-secondary:hover {
+    background-color: #5a6268;
 }
 
-.download-btn {
-    background-color: #ff9800;
-    color: white;
+/* Improved Product Details Styling */
+.product-details {
+    list-style: none;
+    padding: 0;
+    margin: 0;
 }
 
-.download-btn:hover {
-    background-color: #f57c00;
+.product-details li {
+    margin-bottom: 10px;
+    padding: 5px;
+    background-color: #f9f9f9;
+    border-radius: 4px;
 }
 
-.back-btn {
-    background-color: #2196F3;
-    color: white;
+.product-details li strong {
+    color: #333;
 }
 
-.back-btn:hover {
-    background-color: #1e88e5;
+.product-details ul {
+    list-style: none;
+    padding-left: 15px;
+    margin: 5px 0 0 0;
 }
 
-/* Print Styles */
-@media print {
-    body * {
-        visibility: hidden;
-    }
-    .invoice-container, .invoice-container * {
-        visibility: visible;
-    }
-    .invoice-container {
-        position: absolute;
-        left: 0;
-        top: 0;
-        width: 100%;
-        margin: 0;
-        box-shadow: none;
-    }
-    .invoice-actions {
-        display:
+.product-details ul li {
+    margin-bottom: 2px;
+    padding: 0;
+    background-color: transparent;
+    font-size: 0.95em;
+}
+</style>
+
+<?php include '../includes/footer.php'; ?>
