@@ -12,18 +12,22 @@ $database_path = __DIR__ . '/../config/database.php';
 if (file_exists($database_path)) {
     include $database_path;
 } else {
-    // Handle the error if the database file is not found.
     echo "Error: Could not find database connection file at: " . $database_path;
     exit();
 }
 
+// Include PHPMailer for email sending
+use PHPMailer\PHPMailer\PHPMailer;
+use PHPMailer\PHPMailer\Exception;
+
+require __DIR__ . '/../vendor/autoload.php'; // Adjust path if PHPMailer is installed manually
+
 $error = "";
 $success = "";
-$show_setup = false; // Flag to show setup form
+$show_setup = false;
 $show_login = true;
-$show_reset_request = false;
 $show_reset_verify = false;
-$reset_email_or_phone = '';
+$reset_email = '';
 $reset_user_id = 0;
 
 // Utility function to generate OTP
@@ -31,67 +35,108 @@ function generateOTP() {
     return rand(100000, 999999);
 }
 
-// Function to send OTP (simulated)
-function sendOTP($email, $phone, $otp) {
-    // In a real application, use a library like Twilio for SMS and PHPMailer for email
-    echo "<script>console.log('Sending OTP: $otp to Email: $email, Phone: $phone');</script>"; // Keep this for debugging
-    // Simulated sending
-    echo "<p class='alert alert-info'>Simulated OTP sent to $email and $phone: <b>$otp</b> (This is for demonstration only!)</p>";
+// Function to send OTP via Email using PHPMailer
+function sendOTPViaEmail($email, $otp) {
+    $mail = new PHPMailer(true);
+    try {
+        // Disable debugging for production
+        $mail->SMTPDebug = 0; // 0 = off (no debug output)
+
+        // Server settings
+        $mail->isSMTP();
+        $mail->Host = 'smtp.gmail.com'; // Gmail SMTP server
+        $mail->SMTPAuth = true;
+        $mail->Username = 'mdsaminyasarsaadat@gmail.com'; // Your Gmail address
+        $mail->Password = '123'; // Replace with your Gmail App Password (NOT your regular password)
+        $mail->SMTPSecure = PHPMailer::ENCRYPTION_STARTTLS;
+        $mail->Port = 587;
+
+        // Recipients
+        $mail->setFrom('mdsaminyasarsaadat@gmail.com', 'Your App Name');
+        $mail->addAddress($email);
+
+        // Content
+        $mail->isHTML(true);
+        $mail->Subject = 'Your OTP for Password Reset';
+        $mail->Body = "Dear User,<br><br>Your OTP for password reset is <b>$otp</b>. It expires in 10 minutes. Do not share this code.<br><br>Best regards,<br>Your App Team";
+        $mail->AltBody = "Your OTP for password reset is $otp. It expires in 10 minutes. Do not share this code.";
+
+        $mail->send();
+        return true;
+    } catch (Exception $e) {
+        return "Failed to send email: {$mail->ErrorInfo}";
+    }
+}
+
+// Function to send OTP (only via email)
+function sendOTP($email, $otp) {
+    $emailResult = sendOTPViaEmail($email, $otp);
+    if ($emailResult === true) {
+        return true;
+    } else {
+        return "Failed to send OTP: $emailResult";
+    }
 }
 
 if ($_SERVER["REQUEST_METHOD"] == "POST") {
-    if (isset($_POST['check_user'])) { // First Time Setup Check
-        if (isset($_POST['email_or_phone'])) {
-            $email_or_phone = mysqli_real_escape_string($conn, $_POST['email_or_phone']);
+    if (isset($_POST['check_user'])) {
+        if (isset($_POST['email'])) {
+            $email = mysqli_real_escape_string($conn, $_POST['email']);
         } else {
-            $email_or_phone = "";
+            $email = "";
         }
 
-        $sql = "SELECT * FROM users WHERE email='$email_or_phone' OR mobile_number='$email_or_phone'";
+        $sql = "SELECT * FROM users WHERE email='$email'";
         $result = mysqli_query($conn, $sql);
 
-        if ($result === false) { // Check for query error
+        if ($result === false) {
             $error = "Database error: " . mysqli_error($conn);
-            $show_login = true; // Or handle as appropriate
+            $show_login = true;
         } elseif (mysqli_num_rows($result) == 0) {
-            $show_setup = true; // Show setup form
+            $show_setup = true;
             $show_login = false;
         } else {
             $show_login = true;
         }
-    }  elseif (isset($_POST['setup'])) { // Handle First Time Setup
+    } elseif (isset($_POST['setup'])) {
         $name = mysqli_real_escape_string($conn, $_POST['name']);
         $email = mysqli_real_escape_string($conn, $_POST['email']);
         $phone = mysqli_real_escape_string($conn, $_POST['phone']);
         $password = mysqli_real_escape_string($conn, $_POST['password']);
 
-        // Hash the password
-        $hashed_password = password_hash($password, PASSWORD_DEFAULT);
-
-        $sql = "INSERT INTO users (name, email, mobile_number, password, role) VALUES ('$name', '$email', '$phone', '$hashed_password', 'user')"; //set role as user
-
-        if (mysqli_query($conn, $sql)) {
-            $success = "Account created successfully! Please login.";
-            $show_login = true;
-            $show_setup = false;
-        } else {
-            $error = "Error creating account: " . mysqli_error($conn);
-            $show_setup = true; // Stay on setup form with error
+        // Validate email format
+        if (!filter_var($email, FILTER_VALIDATE_EMAIL)) {
+            $error = "Invalid email format.";
+            $show_setup = true;
             $show_login = false;
-        }
-    } elseif (isset($_POST['login'])) { // Handle Login
-        if (isset($_POST['email_or_phone'])) {
-            $email_or_phone = mysqli_real_escape_string($conn, $_POST['email_or_phone']);
         } else {
-            $email_or_phone = "";
+            $hashed_password = password_hash($password, PASSWORD_DEFAULT);
+
+            $sql = "INSERT INTO users (name, email, mobile_number, password, role) VALUES ('$name', '$email', '$phone', '$hashed_password', 'user')";
+
+            if (mysqli_query($conn, $sql)) {
+                $success = "Account created successfully! Please login.";
+                $show_login = true;
+                $show_setup = false;
+            } else {
+                $error = "Error creating account: " . mysqli_error($conn);
+                $show_setup = true;
+                $show_login = false;
+            }
+        }
+    } elseif (isset($_POST['login'])) {
+        if (isset($_POST['email'])) {
+            $email = mysqli_real_escape_string($conn, $_POST['email']);
+        } else {
+            $email = "";
         }
 
         $password = mysqli_real_escape_string($conn, $_POST['password']);
 
-        $sql = "SELECT * FROM users WHERE email='$email_or_phone' OR mobile_number='$email_or_phone'";
+        $sql = "SELECT * FROM users WHERE email='$email'";
         $result = mysqli_query($conn, $sql);
 
-        if ($result === false) {  //check if the query was successful
+        if ($result === false) {
             $error = "Database error: " . mysqli_error($conn);
             $show_login = true;
         } else if (mysqli_num_rows($result) == 1) {
@@ -105,46 +150,76 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
                 $error = "Invalid password.";
             }
         } else {
-            $error = "Account not found.  Please check your Email/Phone.";
+            $error = "Account not found. Please check your email.";
         }
-    } elseif (isset($_POST['reset_request'])) { // Handle Password Reset Request
-        if (isset($_POST['email_or_phone'])) {
-            $reset_email_or_phone = mysqli_real_escape_string($conn, $_POST['email_or_phone']);
+    } elseif (isset($_POST['forgot_password'])) {
+        // Get the email from the login form
+        if (isset($_POST['email']) && !empty($_POST['email'])) {
+            $reset_email = mysqli_real_escape_string($conn, $_POST['email']);
         } else {
-            $reset_email_or_phone = "";
+            $error = "Please enter your email to reset your password.";
+            $show_login = true;
         }
 
-        $sql = "SELECT * FROM users WHERE email='$reset_email_or_phone' OR mobile_number='$reset_email_or_phone'";
-        $result = mysqli_query($conn, $sql);
+        if (!empty($reset_email)) {
+            // Validate email format
+            if (!filter_var($reset_email, FILTER_VALIDATE_EMAIL)) {
+                $error = "Invalid email format.";
+                $show_login = true;
+            } else {
+                $sql = "SELECT * FROM users WHERE email='$reset_email'";
+                $result = mysqli_query($conn, $sql);
 
-        if ($result === false) {
-            $error = "Database error: " . mysqli_error($conn);
-            $show_reset_request = true;
-        } else if (mysqli_num_rows($result) == 1) {
-            $row = mysqli_fetch_assoc($result);
-            $otp = generateOTP();
-            $_SESSION['reset_otp'] = $otp; // Store OTP
-            $_SESSION['reset_user_id'] = $row['id']; // Store user ID
-            sendOTP($row['email'], $row['mobile_number'], $otp); // Send OTP.  Changed to mobile_number
-            $show_reset_request = false;
-            $show_reset_verify = true;
-            $reset_email_or_phone = $row['email']; //for displaying email in verify form
-        } else {
-            $error = "Email/Phone not found.";
-            $show_reset_request = true;
+                if ($result === false) {
+                    $error = "Database error: " . mysqli_error($conn);
+                    $show_login = true;
+                } else if (mysqli_num_rows($result) == 1) {
+                    $row = mysqli_fetch_assoc($result);
+                    $otp = generateOTP();
+                    $_SESSION['reset_otp'] = $otp;
+                    $_SESSION['reset_user_id'] = $row['id'];
+                    $_SESSION['otp_expiry'] = time() + 600; // OTP expires in 10 minutes
+
+                    $sendResult = sendOTP($row['email'], $otp);
+                    if ($sendResult === true) {
+                        $success = "OTP sent to your email. Please check your inbox (and spam/junk folder).";
+                        $show_login = false;
+                        $show_reset_verify = true;
+                        $reset_email = $row['email'];
+                    } else {
+                        $error = $sendResult;
+                        $show_login = true;
+                    }
+                } else {
+                    $error = "Email not found. Please check your email or sign up.";
+                    $show_login = true;
+                }
+            }
         }
-    } elseif (isset($_POST['reset_verify'])) { // Handle Password Reset Verification
+    } elseif (isset($_POST['reset_verify'])) {
         $otp_entered = mysqli_real_escape_string($conn, $_POST['otp']);
         $new_password = mysqli_real_escape_string($conn, $_POST['new_password']);
 
-        if (isset($_SESSION['reset_otp']) && $_SESSION['reset_otp'] == $otp_entered) {
+        if (!isset($_SESSION['reset_otp']) || !isset($_SESSION['otp_expiry'])) {
+            $error = "Session expired. Please request a new OTP.";
+            $show_login = true;
+            $show_reset_verify = false;
+        } elseif (time() > $_SESSION['otp_expiry']) {
+            $error = "OTP has expired. Please request a new OTP.";
+            $show_login = true;
+            $show_reset_verify = false;
+            unset($_SESSION['reset_otp']);
+            unset($_SESSION['reset_user_id']);
+            unset($_SESSION['otp_expiry']);
+        } elseif ($_SESSION['reset_otp'] == $otp_entered) {
             $hashed_password = password_hash($new_password, PASSWORD_DEFAULT);
             $user_id = $_SESSION['reset_user_id'];
             $sql = "UPDATE users SET password='$hashed_password' WHERE id=$user_id";
             if (mysqli_query($conn, $sql)) {
-                $success = "Password reset successfully! Please login.";
-                unset($_SESSION['reset_otp']); // Clear session data
+                $success = "Password reset successfully! Please login with your new password.";
+                unset($_SESSION['reset_otp']);
                 unset($_SESSION['reset_user_id']);
+                unset($_SESSION['otp_expiry']);
                 $show_login = true;
                 $show_reset_verify = false;
             } else {
@@ -155,15 +230,47 @@ if ($_SERVER["REQUEST_METHOD"] == "POST") {
             $error = "Invalid OTP. Please try again.";
             $show_reset_verify = true;
         }
-    }  elseif (isset($_POST['forgot_password'])) {
-        $show_reset_request = true;
-        $show_login = false;
+    } elseif (isset($_POST['resend_otp'])) {
+        if (isset($_SESSION['reset_user_id'])) {
+            $user_id = $_SESSION['reset_user_id'];
+            $sql = "SELECT * FROM users WHERE id=$user_id";
+            $result = mysqli_query($conn, $sql);
+            if ($result && mysqli_num_rows($result) == 1) {
+                $row = mysqli_fetch_assoc($result);
+                $otp = generateOTP();
+                $_SESSION['reset_otp'] = $otp;
+                $_SESSION['otp_expiry'] = time() + 600;
+
+                $sendResult = sendOTP($row['email'], $otp);
+                if ($sendResult === true) {
+                    $success = "OTP resent to your email. Please check your inbox (and spam/junk folder).";
+                    $show_reset_verify = true;
+                } else {
+                    $error = $sendResult;
+                    $show_reset_verify = true;
+                }
+            } else {
+                $error = "User not found. Please request a new OTP.";
+                $show_login = true;
+                $show_reset_verify = false;
+            }
+        } else {
+            $error = "Session expired. Please request a new OTP.";
+            $show_login = true;
+            $show_reset_verify = false;
+        }
+    } elseif (isset($_POST['back_to_login'])) {
+        $show_login = true;
+        $show_reset_verify = false;
+        unset($_SESSION['reset_otp']);
+        unset($_SESSION['reset_user_id']);
+        unset($_SESSION['otp_expiry']);
     }
 }
-if (isset($conn)) { //check if $conn is set before trying to close it.
+
+if (isset($conn)) {
     mysqli_close($conn);
 }
-
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -172,7 +279,7 @@ if (isset($conn)) { //check if $conn is set before trying to close it.
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Login</title>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
-    <script src="https://kit.fontawesome.com/your-fontawesome-kit.js"></script> <style>
+    <style>
         body {
             font-family: 'Inter', sans-serif;
             background-color: #f3f4f6;
@@ -225,7 +332,6 @@ if (isset($conn)) { //check if $conn is set before trying to close it.
         label:focus-within {
             color: #1e40af;
         }
-
 
         input {
             width: 100%;
@@ -362,8 +468,8 @@ if (isset($conn)) { //check if $conn is set before trying to close it.
         <?php endif; ?>
         <form method="post">
             <div class="form-group">
-                <label for="email_or_phone">Email / Phone</label>
-                <input type="text" name="email_or_phone" id="email_or_phone"  placeholder="Enter your Email or Phone Number" class="form-control" required>
+                <label for="email">Email</label>
+                <input type="email" name="email" id="email" placeholder="Enter your Email" class="form-control" required>
             </div>
             <div class="form-group">
                 <label for="password">Password</label>
@@ -392,8 +498,8 @@ if (isset($conn)) { //check if $conn is set before trying to close it.
                 <input type="email" name="email" id="email" class="form-control" required>
             </div>
             <div class="form-group">
-                <label for="phone">Phone Number</label>
-                <input type="text" name="phone" id="phone" class="form-control" required>
+                <label for="phone">Phone Number (Optional)</label>
+                <input type="text" name="phone" id="phone" class="form-control" placeholder="e.g., 01712345678">
             </div>
             <div class="form-group">
                 <label for="password">Password</label>
@@ -403,29 +509,17 @@ if (isset($conn)) { //check if $conn is set before trying to close it.
         </form>
         <?php endif; ?>
 
-        <?php if ($show_reset_request): ?>
-            <h2>Request Password Reset</h2>
-            <?php if ($error): ?>
-                <div class="alert alert-danger"><?php echo $error; ?></div>
-            <?php endif; ?>
-            <form method="post">
-                <div class="form-group">
-                    <label for="email_or_phone">Email / Phone</label>
-                    <input type="text" name="email_or_phone" id="email_or_phone" class="form-control" required>
-                </div>
-                <button type="submit" name="reset_request" class="btn btn-primary">Send OTP</button>
-            </form>
-             <button type="submit" name="login" class="btn btn-secondary mt-3">Back to Login</button>
-        <?php endif; ?>
-
         <?php if ($show_reset_verify): ?>
             <h2>Verify OTP</h2>
             <?php if ($error): ?>
                 <div class="alert alert-danger"><?php echo $error; ?></div>
             <?php endif; ?>
+            <?php if ($success): ?>
+                <div class="alert alert-success"><?php echo $success; ?></div>
+            <?php endif; ?>
             <form method="post">
                 <div class="form-group">
-                    <label for="otp">Enter OTP sent to <?php echo $reset_email_or_phone; ?></label>
+                    <label for="otp">Enter OTP sent to <?php echo htmlspecialchars($reset_email); ?></label>
                     <input type="text" name="otp" id="otp" class="form-control" required>
                 </div>
                 <div class="form-group">
@@ -433,6 +527,12 @@ if (isset($conn)) { //check if $conn is set before trying to close it.
                     <input type="password" name="new_password" id="new_password" class="form-control" required>
                 </div>
                 <button type="submit" name="reset_verify" class="btn btn-primary">Reset Password</button>
+            </form>
+            <form method="post" class="mt-3">
+                <button type="submit" name="resend_otp" class="btn btn-secondary">Resend OTP</button>
+            </form>
+            <form method="post" class="mt-3">
+                <button type="submit" name="back_to_login" class="btn btn-secondary">Back to Login</button>
             </form>
         <?php endif; ?>
     </div>
