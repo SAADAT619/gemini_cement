@@ -143,7 +143,10 @@ if ($categoryResult->num_rows > 0) {
 <div class="section">
     <h3>Add Category</h3>
     <form method="post" class="category-form">
-        <input type="text" name="name" placeholder="Category Name (e.g., Cement, Rod)" required><br>
+        <div class="form-group">
+            <label for="category_name">Category Name</label>
+            <input type="text" id="category_name" name="name" placeholder="Category Name (e.g., Cement, Rod)" required>
+        </div>
         <button type="submit" name="add_category">Add Category</button>
     </form>
 
@@ -174,11 +177,14 @@ if ($categoryResult->num_rows > 0) {
         </tbody>
     </table>
 
-    <div id="edit_category_form" style="display:none;">
+    <div id="edit_category_form" class="form-container" style="display:none;">
         <h3>Edit Category</h3>
         <form method="post">
             <input type="hidden" name="id" id="edit_id">
-            <input type="text" name="name" id="edit_name" placeholder="Category Name" required><br>
+            <div class="form-group">
+                <label for="edit_name">Category Name</label>
+                <input type="text" name="name" id="edit_name" placeholder="Category Name" required>
+            </div>
             <button type="submit" name="update_category">Update Category</button>
             <button type="button" onclick="document.getElementById('edit_category_form').style.display='none';">Cancel</button>
         </form>
@@ -191,25 +197,46 @@ if ($categoryResult->num_rows > 0) {
 <div class="section">
     <h3>Add Product</h3>
     <form method="post" class="product-form">
-        <select name="category_id" id="category_id" required onchange="updateUnitDropdown()">
-            <option value="">Select Category</option>
-            <?php
-            $categoryResult->data_seek(0);
-            if ($categoryResult->num_rows > 0) {
-                while ($categoryRow = $categoryResult->fetch_assoc()) {
-                    echo "<option value='" . $categoryRow['id'] . "'>" . htmlspecialchars($categoryRow['name']) . "</option>";
+        <div class="form-group">
+            <label for="category_id">Category</label>
+            <select name="category_id" id="category_id" required onchange="updateUnitDropdown()">
+                <option value="">Select Category</option>
+                <?php
+                $categoryResult->data_seek(0);
+                if ($categoryResult->num_rows > 0) {
+                    while ($categoryRow = $categoryResult->fetch_assoc()) {
+                        echo "<option value='" . $categoryRow['id'] . "'>" . htmlspecialchars($categoryRow['name']) . "</option>";
+                    }
                 }
-            }
-            ?>
-        </select><br>
-        <input type="text" name="name" placeholder="Product Name (e.g., Portland Cement)" required><br>
-        <input type="text" name="brand_name" placeholder="Brand Name (e.g., BSRM)" required><br>
-        <input type="text" name="type" placeholder="Type (e.g., 8mm for Rod, leave blank for Cement)"><br>
-        <input type="number" name="price" placeholder="Price" step="0.01" required><br>
-        <input type="number" name="quantity" placeholder="Quantity" step="0.01" required><br>
-        <select name="unit" id="unit" required>
-            <option value="">Select Unit</option>
-        </select><br>
+                ?>
+            </select>
+        </div>
+        <div class="form-group">
+            <label for="name">Product Name</label>
+            <input type="text" id="name" name="name" placeholder="Product Name (e.g., Portland Cement)" required>
+        </div>
+        <div class="form-group">
+            <label for="brand_name">Brand Name</label>
+            <input type="text" id="brand_name" name="brand_name" placeholder="Brand Name (e.g., BSRM)" required>
+        </div>
+        <div class="form-group">
+            <label for="type">Type</label>
+            <input type="text" id="type" name="type" placeholder="Type (e.g., 8mm for Rod, leave blank for Cement)">
+        </div>
+        <div class="form-group">
+            <label for="price">Price</label>
+            <input type="number" id="price" name="price" placeholder="Price" step="0.01" required>
+        </div>
+        <div class="form-group">
+            <label for="quantity">Quantity</label>
+            <input type="number" id="quantity" name="quantity" placeholder="Quantity" step="0.01" required>
+        </div>
+        <div class="form-group">
+            <label for="unit">Unit</label>
+            <select name="unit" id="unit" required>
+                <option value="">Select Unit</option>
+            </select>
+        </div>
         <button type="submit" name="add_product">Add Product</button>
     </form>
 
@@ -255,29 +282,50 @@ if ($categoryResult->num_rows > 0) {
         </tbody>
     </table>
 
-    <div id="edit_product_form" style="display:none;">
+    <div id="edit_product_form" class="form-container" style="display:none;">
         <h3>Edit Product</h3>
-        <form method="post">
+        <form method="post" class="product-form">
             <input type="hidden" name="id" id="edit_product_id">
-            <select name="category_id" id="edit_category_id" required onchange="updateEditUnitDropdown()">
-                <option value="">Select Category</option>
-                <?php
-                $categoryResult->data_seek(0);
-                if ($categoryResult->num_rows > 0) {
-                    while ($categoryRow = $categoryResult->fetch_assoc()) {
-                        echo "<option value='" . $categoryRow['id'] . "'>" . htmlspecialchars($categoryRow['name']) . "</option>";
+            <div class="form-group">
+                <label for="edit_category_id">Category</label>
+                <select name="category_id" id="edit_category_id" required onchange="updateEditUnitDropdown()">
+                    <option value="">Select Category</option>
+                    <?php
+                    $categoryResult->data_seek(0);
+                    if ($categoryResult->num_rows > 0) {
+                        while ($categoryRow = $categoryResult->fetch_assoc()) {
+                            echo "<option value='" . $categoryRow['id'] . "'>" . htmlspecialchars($categoryRow['name']) . "</option>";
+                        }
                     }
-                }
-                ?>
-            </select><br>
-            <input type="text" name="name" id="edit_name" placeholder="Product Name" required><br>
-            <input type="text" name="brand_name" id="edit_brand_name" placeholder="Brand Name" required><br>
-            <input type="text" name="type" id="edit_type" placeholder="Type"><br>
-            <input type="number" name="price" id="edit_price" placeholder="Price" step="0.01" required><br>
-            <input type="number" name="quantity" id="edit_quantity" placeholder="Quantity" step="0.01" required><br>
-            <select name="unit" id="edit_unit" required>
-                <option value="">Select Unit</option>
-            </select><br>
+                    ?>
+                </select>
+            </div>
+            <div class="form-group">
+                <label for="edit_name">Product Name</label>
+                <input type="text" name="name" id="edit_name" placeholder="Product Name" required>
+            </div>
+            <div class="form-group">
+                <label for="edit_brand_name">Brand Name</label>
+                <input type="text" name="brand_name" id="edit_brand_name" placeholder="Brand Name" required>
+            </div>
+            <div class="form-group">
+                <label for="edit_type">Type</label>
+                <input type="text" name="type" id="edit_type" placeholder="Type">
+            </div>
+            <div class="form-group">
+                <label for="edit_price">Price</label>
+                <input type="number" name="price" id="edit_price" placeholder="Price" step="0.01" required>
+            </div>
+            <div class="form-group">
+                <label for="edit_quantity">Quantity</label>
+                <input type="number" name="quantity" id="edit_quantity" placeholder="Quantity" step="0.01" required>
+            </div>
+            <div class="form-group">
+                <label for="edit_unit">Unit</label>
+                <select name="unit" id="edit_unit" required>
+                    <option value="">Select Unit</option>
+                </select>
+            </div>
             <button type="submit" name="update_product">Update Product</button>
             <button type="button" onclick="document.getElementById('edit_product_form').style.display='none';">Cancel</button>
         </form>
@@ -395,14 +443,41 @@ if ($categoryResult->num_rows > 0) {
     margin-bottom: 20px;
 }
 
-.category-form, .product-form {
+.category-form {
     display: flex;
     flex-wrap: wrap;
     gap: 10px;
 }
 
-.category-form input, .product-form input, .product-form select {
+.product-form {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 20px; /* Increased gap for better spacing between form fields */
+}
+
+.form-container {
+    margin-top: 20px;
+}
+
+.form-group {
     flex: 1 1 200px;
+    display: flex;
+    flex-direction: column;
+    min-width: 200px; /* Ensure fields don't get too narrow */
+}
+
+.form-group label {
+    font-weight: bold;
+    margin-bottom: 5px;
+    color: #333;
+    font-size: 14px;
+}
+
+.category-form input, .product-form input, .product-form select {
+    padding: 8px;
+    border: 1px solid #ddd;
+    border-radius: 4px;
+    font-size: 14px;
 }
 
 .category-form button, .product-form button {
@@ -412,6 +487,7 @@ if ($categoryResult->num_rows > 0) {
     border: none;
     border-radius: 4px;
     cursor: pointer;
+    align-self: flex-start;
 }
 
 .category-form button:hover, .product-form button:hover {
@@ -422,6 +498,7 @@ table {
     width: 100%;
     border-collapse: collapse;
     margin-bottom: 20px;
+    margin-top: 20px; /* Added spacing between table and preceding elements */
 }
 
 th, td {
